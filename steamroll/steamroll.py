@@ -31,14 +31,14 @@ def remove_hydrogens(molecule: Chem.rdchem.Mol) -> Chem.rdchem.Mol:
 
         # Delete hydrogen add an explicit H to its first neighbor
         if atom.GetAtomicNum() == 1:
-            if neighbors := atom.GetNeighbors():  # type: ignore [call-arg]
+            if neighbors := atom.GetNeighbors():  # type: ignore [call-arg, unused-ignore]
                 neighbor = neighbors[0]
                 rwmol.RemoveAtom(idx)
                 neighbor.SetNumExplicitHs(neighbor.GetNumExplicitHs() + 1)
             else:
                 logger.warning("Hydrogen atom has no neighbors, skipping")
 
-    return rwmol.GetMol()  # type: ignore [call-arg, no-any-return]
+    return rwmol.GetMol()  # type: ignore [call-arg, no-any-return, unused-ignore]
 
 
 def fragment(molecule: Chem.rdchem.Mol) -> list[Chem.rdchem.Mol]:
