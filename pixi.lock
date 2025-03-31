@@ -1087,7 +1087,7 @@ packages:
 - pypi: .
   name: steamroll
   version: 0.0.1
-  sha256: a77c8c89b4d23fec72d3135729484f4d0f8346406619880cfd934605aa58c14d
+  sha256: ccaffd557c97bbaa4b2763038c1310b645380d59a2b89129d9c47431a229e804
   requires_dist:
   - rdkit
   - numpy
