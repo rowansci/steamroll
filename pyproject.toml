@@ -1,6 +1,6 @@
 [project]
 name = "steamroll"
-description = "Steamroll"
+description = "Package to convert 3D molecules to RDKit"
 license = {file = "LICENSE"}
 version = "0.0.1"
 readme = "README.md"
