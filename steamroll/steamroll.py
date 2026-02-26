@@ -90,6 +90,7 @@ def to_rdkit(
     coordinates: ArrayLike,
     charge: int = 0,
     remove_Hs: bool = True,
+    fail_without_bond_order: bool = False,
 ) -> Chem.rdchem.Mol:
     """Convert a given molecular geometry to an RDKit molecule.
 
@@ -98,6 +99,7 @@ def to_rdkit(
         coordinates: coordinates, in Å
         charge: charge
         remove_Hs: whether or not to strip hydrogens from the output molecule
+        fail_without_bond_order: if bond order cannot be detected, raise SteamrollConversionError
 
     Raises:
         ValueError: if input dimensions aren't correct
@@ -130,8 +132,9 @@ def to_rdkit(
                 rdkm = xyz2mol(atomic_numbers, coords, charge=charge)[0]
             except (Exception, ValueError, IndexError):
                 rdkm = xyz2mol(atomic_numbers, coords, charge=charge, use_huckel=True)[0]
-        except Exception:
-            pass  # fall through below
+        except Exception as e:
+            if fail_without_bond_order:
+                raise SteamrollConversionError from e
 
     if has_tm:
         # Use the specialized TMC converter; Hs come back implicit → make explicit.
