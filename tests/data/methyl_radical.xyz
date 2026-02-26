@@ -1,0 +1,6 @@
+4
+name: methyl radical; charge: 1; multiplicity: 1; SMILES: [CH3+]; method: OMol25's eSEN Conserving Small; energy: -39.77199700;
+C     0.00000000  -0.00000000   0.00000000
+H     1.07946500   0.00000000   0.00000000
+H    -0.53973500   0.93483780  -0.00012656
+H    -0.53973500  -0.93483780   0.00012655

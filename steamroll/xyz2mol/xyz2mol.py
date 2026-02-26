@@ -84,7 +84,7 @@ atomic_valence[16] = [6,3,2] #[6,4,2]
 atomic_valence[17] = [1]
 atomic_valence[32] = [4]
 atomic_valence[35] = [1]
-atomic_valence[53] = [1]
+atomic_valence[53] = [1,3,5]
 
 atomic_valence_electrons = {}
 atomic_valence_electrons[1] = 1

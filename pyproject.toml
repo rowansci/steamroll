@@ -2,7 +2,7 @@
 name = "steamroll"
 description = "Package to convert 3D molecules to RDKit"
 license = {file = "LICENSE"}
-version = "0.0.2"
+version = "0.0.3"
 readme = "README.md"
 keywords = []
 authors = [
@@ -28,7 +28,7 @@ dev = [
 
 [tool.ruff]
 line-length = 100
-exclude = ["steamroll/xyz2mol.py"]
+exclude = ["steamroll/xyz2mol", "steamroll/xyz2mol_tmc"]
 
 [tool.ruff.lint]
 select = [
@@ -70,11 +70,11 @@ convention = "google"
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "steamroll"]
-addopts = "--doctest-modules --ignore=steamroll/xyz2mol.py"
+addopts = "--doctest-modules --ignore=steamroll/xyz2mol --ignore=steamroll/xyz2mol_tmc"
 doctest_optionflags = "NORMALIZE_WHITESPACE"
 
 [tool.ty.src]
-exclude = ["steamroll/xyz2mol.py"]
+exclude = ["steamroll/xyz2mol", "steamroll/xyz2mol_tmc"]
 
 [build-system]
 build-backend = "hatchling.build"
