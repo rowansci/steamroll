@@ -15,10 +15,9 @@ from .xyz2mol_tmc.xyz2mol_tmc import TRANSITION_METALS_NUM, get_tmc_mol
 
 logger = logging.getLogger(__name__)
 
-# Lanthanides Ce-Yb (58-70) and actinides Ac-Lr (89-103) that xyz2mol cannot
-# handle. Molecules containing these elements bypass xyz2mol and go directly to
-# the geometry-only xyz2ac_obabel fallback.
-_SKIP_XYZ2MOL: frozenset[int] = frozenset(range(58, 71)) | frozenset(range(89, 104))
+# Lanthanides and actinides are now included in TRANSITION_METALS_NUM, so
+# has_tm will be True for them and they route through get_tmc_mol directly.
+_SKIP_XYZ2MOL: frozenset[int] = frozenset()
 
 
 class SteamrollConversionError(Exception):

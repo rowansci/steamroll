@@ -122,6 +122,15 @@ __ATOM_LIST__ = [
     "u",
     "np",
     "pu",
+    "am",
+    "cm",
+    "bk",
+    "cf",
+    "es",
+    "fm",
+    "md",
+    "no",
+    "lr",
 ]
 
 
@@ -232,6 +241,73 @@ atomic_valence_electrons[35] = 7
 atomic_valence_electrons[34] = 6
 atomic_valence_electrons[52] = 6
 atomic_valence_electrons[53] = 7
+
+# d-block TMs — match values in xyz2mol_tmc.py
+atomic_valence_electrons[21] = 3   # Sc
+atomic_valence_electrons[22] = 4   # Ti
+atomic_valence_electrons[23] = 5   # V
+atomic_valence_electrons[24] = 6   # Cr
+atomic_valence_electrons[25] = 7   # Mn
+atomic_valence_electrons[26] = 8   # Fe
+atomic_valence_electrons[27] = 9   # Co
+atomic_valence_electrons[28] = 10  # Ni
+atomic_valence_electrons[29] = 11  # Cu
+atomic_valence_electrons[30] = 12  # Zn
+
+atomic_valence_electrons[39] = 3   # Y
+atomic_valence_electrons[40] = 4   # Zr
+atomic_valence_electrons[41] = 5   # Nb
+atomic_valence_electrons[42] = 6   # Mo
+atomic_valence_electrons[43] = 7   # Tc
+atomic_valence_electrons[44] = 8   # Ru
+atomic_valence_electrons[45] = 9   # Rh
+atomic_valence_electrons[46] = 10  # Pd
+atomic_valence_electrons[47] = 11  # Ag
+atomic_valence_electrons[48] = 12  # Cd
+
+atomic_valence_electrons[57] = 3   # La
+atomic_valence_electrons[71] = 3   # Lu
+atomic_valence_electrons[72] = 4   # Hf
+atomic_valence_electrons[73] = 5   # Ta
+atomic_valence_electrons[74] = 6   # W
+atomic_valence_electrons[75] = 7   # Re
+atomic_valence_electrons[76] = 8   # Os
+atomic_valence_electrons[77] = 9   # Ir
+atomic_valence_electrons[78] = 10  # Pt
+atomic_valence_electrons[79] = 11  # Au
+atomic_valence_electrons[80] = 12  # Hg
+
+# Lanthanides — 4f electrons treated as core-like; dominant +3 chemistry.
+atomic_valence_electrons[58] = 3   # Ce
+atomic_valence_electrons[59] = 3   # Pr
+atomic_valence_electrons[60] = 3   # Nd
+atomic_valence_electrons[61] = 3   # Pm
+atomic_valence_electrons[62] = 3   # Sm
+atomic_valence_electrons[63] = 3   # Eu
+atomic_valence_electrons[64] = 3   # Gd
+atomic_valence_electrons[65] = 3   # Tb
+atomic_valence_electrons[66] = 3   # Dy
+atomic_valence_electrons[67] = 3   # Ho
+atomic_valence_electrons[68] = 3   # Er
+atomic_valence_electrons[69] = 3   # Tm
+atomic_valence_electrons[70] = 3   # Yb
+
+# Actinides — notional bonding electron counts; early actinides are more covalent.
+atomic_valence_electrons[89] = 3   # Ac
+atomic_valence_electrons[90] = 4   # Th
+atomic_valence_electrons[91] = 5   # Pa
+atomic_valence_electrons[92] = 6   # U
+atomic_valence_electrons[93] = 7   # Np
+atomic_valence_electrons[94] = 8   # Pu
+atomic_valence_electrons[95] = 3   # Am (treated like lanthanide)
+atomic_valence_electrons[96] = 3   # Cm
+atomic_valence_electrons[97] = 3   # Bk
+atomic_valence_electrons[98] = 3   # Cf
+atomic_valence_electrons[99] = 3   # Es
+atomic_valence_electrons[100] = 3  # Fm
+atomic_valence_electrons[101] = 3  # Md
+atomic_valence_electrons[102] = 3  # No
+atomic_valence_electrons[103] = 3  # Lr
 
 
 def str_atom(atom):
@@ -1038,6 +1114,11 @@ def xyz2AC_obabel(atoms, xyz, tolerance=0.45):
 
     Returns:
         AC - adjacency matrix
+
+    NOTE: RDKit's GetRcovalent supplies covalent radii for lanthanides and
+    actinides, so the default 0.45 Å tolerance should work for f-block metals.
+    If structures with these elements show missing M-L bonds, consider
+    increasing tolerance to ~0.55-0.60 Å.
     """
     global atomic_valence
     # atomic_valence[8] = [2,1]
