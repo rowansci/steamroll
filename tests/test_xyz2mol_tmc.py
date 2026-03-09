@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-import pytest
 from rdkit import Chem
 
 from steamroll.xyz2mol_tmc.xyz2mol_tmc import (
@@ -16,74 +15,130 @@ from steamroll.xyz2mol_tmc.xyz2mol_tmc import (
 HERE = Path(__file__).parent
 DATA_DIR = HERE / "data"
 
-# ---------------------------------------------------------------------------
-# Smoke tests: lookup-table completeness
-# ---------------------------------------------------------------------------
 
-LANTHANIDE_NUMS = list(range(57, 72))   # La(57) through Lu(71)
-ACTINIDE_NUMS   = list(range(89, 104))  # Ac(89) through Lr(103)
+LANTHANIDE_NUMS = list(range(57, 72))  # La(57) through Lu(71)
+ACTINIDE_NUMS = list(range(89, 104))  # Ac(89) through Lr(103)
 
 
 def test_lanthanide_nums_in_transition_metals_num():
+    """Test that lanthanides are included in transition metals."""
     for n in LANTHANIDE_NUMS:
         assert n in TRANSITION_METALS_NUM, f"Atomic number {n} missing from TRANSITION_METALS_NUM"
 
 
 def test_actinide_nums_in_transition_metals_num():
+    """Test that actinides are included in transition metals."""
     for n in ACTINIDE_NUMS:
         assert n in TRANSITION_METALS_NUM, f"Atomic number {n} missing from TRANSITION_METALS_NUM"
 
 
 def test_lanthanide_symbols_in_allowed_oxidation_states():
-    lanthanide_symbols = ["La", "Ce", "Pr", "Nd", "Pm", "Sm", "Eu",
-                          "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb", "Lu"]
+    """Test that lanthanides are included in the list of allowed oxidation states."""
+    lanthanide_symbols = [
+        "La",
+        "Ce",
+        "Pr",
+        "Nd",
+        "Pm",
+        "Sm",
+        "Eu",
+        "Gd",
+        "Tb",
+        "Dy",
+        "Ho",
+        "Er",
+        "Tm",
+        "Yb",
+        "Lu",
+    ]
     for sym in lanthanide_symbols:
         assert sym in ALLOWED_OXIDATION_STATES, f"{sym} missing from ALLOWED_OXIDATION_STATES"
 
 
 def test_actinide_symbols_in_allowed_oxidation_states():
-    actinide_symbols = ["Ac", "Th", "Pa", "U", "Np", "Pu", "Am",
-                        "Cm", "Bk", "Cf", "Es", "Fm", "Md", "No", "Lr"]
+    """Test that actinides are included in the list of allowed oxidation states."""
+    actinide_symbols = [
+        "Ac",
+        "Th",
+        "Pa",
+        "U",
+        "Np",
+        "Pu",
+        "Am",
+        "Cm",
+        "Bk",
+        "Cf",
+        "Es",
+        "Fm",
+        "Md",
+        "No",
+        "Lr",
+    ]
     for sym in actinide_symbols:
         assert sym in ALLOWED_OXIDATION_STATES, f"{sym} missing from ALLOWED_OXIDATION_STATES"
 
 
 def test_lanthanide_symbols_in_transition_metals():
-    lanthanide_symbols = ["Ce", "Pr", "Nd", "Pm", "Sm", "Eu",
-                          "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb"]
+    """Test that lanthanide symbols are included in transition metals."""
+    lanthanide_symbols = [
+        "Ce",
+        "Pr",
+        "Nd",
+        "Pm",
+        "Sm",
+        "Eu",
+        "Gd",
+        "Tb",
+        "Dy",
+        "Ho",
+        "Er",
+        "Tm",
+        "Yb",
+    ]
     for sym in lanthanide_symbols:
         assert sym in TRANSITION_METALS, f"{sym} missing from TRANSITION_METALS"
 
 
 def test_actinide_symbols_in_transition_metals():
-    actinide_symbols = ["Ac", "Th", "Pa", "U", "Np", "Pu", "Am",
-                        "Cm", "Bk", "Cf", "Es", "Fm", "Md", "No", "Lr"]
+    """Test that actinide symbols are included in transition metals."""
+    actinide_symbols = [
+        "Ac",
+        "Th",
+        "Pa",
+        "U",
+        "Np",
+        "Pu",
+        "Am",
+        "Cm",
+        "Bk",
+        "Cf",
+        "Es",
+        "Fm",
+        "Md",
+        "No",
+        "Lr",
+    ]
     for sym in actinide_symbols:
         assert sym in TRANSITION_METALS, f"{sym} missing from TRANSITION_METALS"
 
 
-# ---------------------------------------------------------------------------
-# SMARTS validity
-# ---------------------------------------------------------------------------
-
 def test_metal_non_hg_smarts_parses():
+    """Test that we can parse the MetalNon_Hg SMARTS string."""
     mol = Chem.MolFromSmarts(MetalNon_Hg)
     assert mol is not None, "MetalNon_Hg SMARTS failed to parse"
 
 
 def test_metal_non_hg_contains_lanthanides():
+    """Test that the MetalNon_Hg SMARTS string contains lanthanides."""
     for n in range(58, 71):
         assert f"#{n}" in MetalNon_Hg, f"#{n} (lanthanide) missing from MetalNon_Hg SMARTS"
 
 
 def test_metal_non_hg_contains_actinides():
+    """Test that the MetalNon_Hg SMARTS string contains actinides."""
     for n in range(89, 104):
         assert f"#{n}" in MetalNon_Hg, f"#{n} (actinide) missing from MetalNon_Hg SMARTS"
 
-
-# ---------------------------------------------------------------------------
-# End-to-end: lanthanide (Ce with 18-crown-6)
-# ---------------------------------------------------------------------------
 
 def test_ce_crown_ether_end_to_end():
     """Ce(+1) 18-crown-6 complex should produce a valid, sanitizable mol."""
@@ -100,10 +155,6 @@ def test_ce_crown_ether_end_to_end():
     assert ce_charge == 1, f"Expected Ce formal charge +1, got {ce_charge}"
 
 
-# ---------------------------------------------------------------------------
-# End-to-end: actinide ([UCl6]2-)
-# ---------------------------------------------------------------------------
-
 def test_ucl6_end_to_end():
     """[UCl6]2- (octahedral U(IV)) should produce a valid, sanitizable mol."""
     xyz_file = str(DATA_DIR / "UCl6.xyz")
@@ -118,10 +169,6 @@ def test_ucl6_end_to_end():
     u_charge = u_atoms[0].GetFormalCharge()
     assert u_charge == 4, f"Expected U formal charge +4, got {u_charge}"
 
-
-# ---------------------------------------------------------------------------
-# Regression: d-block metal still works (ferrocene)
-# ---------------------------------------------------------------------------
 
 def test_ferrocene_regression():
     """Ferrocene should still produce a valid mol with Fe(+2)."""
