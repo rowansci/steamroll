@@ -9,6 +9,7 @@ Main implementation by Jan H. Jensen, based on the paper
     DOI: 10.1002/bkcs.10334
 
 Modified by Maria Harris Rasmussen 2024
+Modified by Corin Wagen 2026
 """
 
 import copy
@@ -122,116 +123,51 @@ __ATOM_LIST__ = [
     "u",
     "np",
     "pu",
+    "am",
+    "cm",
+    "bk",
+    "cf",
+    "es",
+    "fm",
+    "md",
+    "no",
+    "lr",
 ]
 
 
 global atomic_valence
 global atomic_valence_electrons
 
-atomic_valence = defaultdict(list)
-atomic_valence[1] = [1]
-atomic_valence[5] = [3, 4]
-atomic_valence[6] = [4, 2]
-atomic_valence[7] = [3, 4]
-atomic_valence[8] = [2, 1, 3]  # [2,1,3]
-atomic_valence[9] = [1]
-atomic_valence[13] = [3, 4]
-atomic_valence[14] = [4]
-atomic_valence[15] = [3, 5]  # [5,4,3]
-atomic_valence[16] = [2, 4, 6]  # [6,3,2]
-atomic_valence[17] = [1]
-atomic_valence[18] = [0]
-atomic_valence[32] = [4]
-atomic_valence[33] = [5, 3]
-atomic_valence[35] = [1]
-atomic_valence[34] = [2]
-atomic_valence[52] = [2]
-atomic_valence[53] = [1]
+atomic_valence = defaultdict(list, {
+    1: [1], 5: [3, 4], 6: [4, 2], 7: [3, 4], 8: [2, 1, 3],
+    9: [1], 13: [3, 4], 14: [4], 15: [3, 5], 16: [2, 4, 6],
+    17: [1], 18: [0], 32: [4], 33: [5, 3], 34: [2], 35: [1],
+    52: [2], 53: [1],
+    # d-block, lanthanides, actinides: sentinel valence = 20
+    **{z: [20] for z in range(21, 31)},   # Sc–Zn
+    **{z: [20] for z in range(39, 49)},   # Y–Cd
+    **{z: [20] for z in range(57, 81)},   # La–Hg
+    **{z: [20] for z in range(89, 104)},  # Ac–Lr
+})
 
-atomic_valence[21] = [20]
-atomic_valence[22] = [20]
-atomic_valence[23] = [20]
-atomic_valence[24] = [20]
-atomic_valence[25] = [20]
-atomic_valence[26] = [20]
-atomic_valence[27] = [20]
-atomic_valence[28] = [20]
-atomic_valence[29] = [20]
-atomic_valence[30] = [20]
-
-atomic_valence[39] = [20]
-atomic_valence[40] = [20]
-atomic_valence[41] = [20]
-atomic_valence[42] = [20]
-atomic_valence[43] = [20]
-atomic_valence[44] = [20]
-atomic_valence[45] = [20]
-atomic_valence[46] = [20]
-atomic_valence[47] = [20]
-atomic_valence[48] = [20]
-
-
-atomic_valence[57] = [20]
-atomic_valence[58] = [20]
-atomic_valence[59] = [20]
-atomic_valence[60] = [20]
-atomic_valence[61] = [20]
-atomic_valence[62] = [20]
-atomic_valence[63] = [20]
-atomic_valence[64] = [20]
-atomic_valence[65] = [20]
-atomic_valence[66] = [20]
-atomic_valence[67] = [20]
-atomic_valence[68] = [20]
-atomic_valence[69] = [20]
-atomic_valence[70] = [20]
-atomic_valence[71] = [20]
-atomic_valence[72] = [20]
-atomic_valence[73] = [20]
-atomic_valence[74] = [20]
-atomic_valence[75] = [20]
-atomic_valence[76] = [20]
-atomic_valence[77] = [20]
-atomic_valence[78] = [20]
-atomic_valence[79] = [20]
-atomic_valence[80] = [20]
-
-atomic_valence[89] = [20]
-atomic_valence[90] = [20]
-atomic_valence[91] = [20]
-atomic_valence[92] = [20]
-atomic_valence[93] = [20]
-atomic_valence[94] = [20]
-atomic_valence[95] = [20]
-atomic_valence[96] = [20]
-atomic_valence[97] = [20]
-atomic_valence[98] = [20]
-atomic_valence[99] = [20]
-atomic_valence[100] = [20]
-atomic_valence[101] = [20]
-atomic_valence[102] = [20]
-atomic_valence[103] = [20]
-
-
-atomic_valence_electrons = {}
-atomic_valence_electrons[1] = 1
-atomic_valence_electrons[5] = 3
-atomic_valence_electrons[6] = 4
-atomic_valence_electrons[7] = 5
-atomic_valence_electrons[8] = 6
-atomic_valence_electrons[9] = 7
-atomic_valence_electrons[13] = 3
-atomic_valence_electrons[14] = 4
-atomic_valence_electrons[15] = 5
-atomic_valence_electrons[16] = 6
-atomic_valence_electrons[17] = 7
-atomic_valence_electrons[18] = 8
-atomic_valence_electrons[32] = 4
-atomic_valence_electrons[33] = 5
-atomic_valence_electrons[35] = 7
-atomic_valence_electrons[34] = 6
-atomic_valence_electrons[52] = 6
-atomic_valence_electrons[53] = 7
+atomic_valence_electrons = {
+    # Main-group
+    1: 1, 5: 3, 6: 4, 7: 5, 8: 6, 9: 7,
+    13: 3, 14: 4, 15: 5, 16: 6, 17: 7, 18: 8,
+    32: 4, 33: 5, 34: 6, 35: 7, 52: 6, 53: 7,
+    # 3d TMs (Sc–Zn): 3, 4, … 12
+    **{z: z - 18 for z in range(21, 31)},
+    # 4d TMs (Y–Cd): 3, 4, … 12
+    **{z: z - 36 for z in range(39, 49)},
+    # 5d: La, then Lu–Hg: 3, 4, … 12
+    57: 3,
+    **{z: z - 68 for z in range(71, 81)},
+    # Lanthanides Ce–Yb: all trivalent
+    **{z: 3 for z in range(58, 71)},
+    # Actinides: Ac–Pu ramp 3–8, then Am–Lr trivalent
+    **{89: 3, 90: 4, 91: 5, 92: 6, 93: 7, 94: 8},
+    **{z: 3 for z in range(95, 104)},
+}
 
 
 def str_atom(atom):
@@ -279,7 +215,7 @@ def get_BO(AC, UA, DU, valences, UA_pairs, use_graph=True):
 
 
 def valences_not_too_large(BO, valences):
-    """"""
+    """Checks that the number of valences isn't too large."""
     number_of_bonds_list = BO.sum(axis=1)
     for valence, number_of_bonds in zip(valences, number_of_bonds_list):
         if number_of_bonds > valence:
@@ -1038,6 +974,11 @@ def xyz2AC_obabel(atoms, xyz, tolerance=0.45):
 
     Returns:
         AC - adjacency matrix
+
+    NOTE: RDKit's GetRcovalent supplies covalent radii for lanthanides and
+    actinides, so the default 0.45 Å tolerance should work for f-block metals.
+    If structures with these elements show missing M-L bonds, consider
+    increasing tolerance to ~0.55-0.60 Å.
     """
     global atomic_valence
     # atomic_valence[8] = [2,1]

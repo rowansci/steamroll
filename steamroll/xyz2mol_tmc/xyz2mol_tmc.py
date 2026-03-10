@@ -1,4 +1,11 @@
-"""Module for the xyz2mol functionality for TMCs"""
+"""Module for the xyz2mol functionality for TMCs.
+
+Supports d-block transition metals, lanthanides (La=57, Ce–Yb=58–70, Lu=71),
+and actinides (Ac–Lr=89–103). The f-block elements use an ionic decomposition
+model where 4f electrons (lanthanides) and most 5f electrons (heavier actinides)
+are treated as core-like and non-bonding. Actinide covalency (especially for
+early actinides U, Np, Pu) is only partially captured by this approach.
+"""
 
 import argparse
 import logging
@@ -20,13 +27,23 @@ from .xyz2mol_local import (
 )
 
 # fmt: off
+# Includes d-block transition metals, lanthanides (La=57, Ce-Yb=58-70, Lu=71),
+# and actinides (Ac-Lr=89-103). La and Lu are included as honorary members.
 TRANSITION_METALS = ["Sc","Ti","V","Cr","Mn","Fe","Co","La","Ni","Cu","Zn",
                      "Y","Zr","Nb","Mo","Tc","Ru","Rh","Pd","Ag","Cd","Lu",
                      "Hf","Ta","W","Re","Os","Ir","Pt","Au","Hg",
+                     # Lanthanides (Ce-Yb)
+                     "Ce","Pr","Nd","Pm","Sm","Eu","Gd","Tb","Dy","Ho","Er","Tm","Yb",
+                     # Actinides (Ac-Lr)
+                     "Ac","Th","Pa","U","Np","Pu","Am","Cm","Bk","Cf","Es","Fm","Md","No","Lr",
 ]
 
 TRANSITION_METALS_NUM = [21,22,23,24,25,26,27,57,28,29,30,39,40,41,
                          42,43,44,45,46,47,48,71,72,73,74,75,76,77,78,79,80,
+                         # Lanthanides (Ce-Yb)
+                         58,59,60,61,62,63,64,65,66,67,68,69,70,
+                         # Actinides (Ac-Lr)
+                         89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,
 ]
 
 
@@ -52,6 +69,7 @@ ALLOWED_OXIDATION_STATES = {
     "Ag": [1],
     "Cd": [2],
     "La": [3],
+    "Lu": [3],
     "Hf": [4],
     "Ta": [3, 4, 5],
     "W": [2, 3, 4, 5, 6],
@@ -61,6 +79,36 @@ ALLOWED_OXIDATION_STATES = {
     "Pt": [2, 4],
     "Au": [1, 3],
     "Hg": [1, 2],
+    # Lanthanides (Ce-Yb)
+    "Ce": [3, 4],
+    "Pr": [3, 4],
+    "Nd": [3],
+    "Pm": [3],
+    "Sm": [2, 3],
+    "Eu": [2, 3],
+    "Gd": [3],
+    "Tb": [3, 4],
+    "Dy": [3],
+    "Ho": [3],
+    "Er": [3],
+    "Tm": [2, 3],
+    "Yb": [2, 3],
+    # Actinides (Ac-Lr)
+    "Ac": [3],
+    "Th": [4],
+    "Pa": [4, 5],
+    "U":  [3, 4, 5, 6],
+    "Np": [3, 4, 5, 6, 7],
+    "Pu": [3, 4, 5, 6, 7],
+    "Am": [3, 4, 5, 6],
+    "Cm": [3, 4],
+    "Bk": [3, 4],
+    "Cf": [3],
+    "Es": [3],
+    "Fm": [3],
+    "Md": [2, 3],
+    "No": [2, 3],
+    "Lr": [3],
 }
 # fmt: on
 
@@ -71,7 +119,14 @@ params.splitAromaticC = True
 params.splitGrignards = True
 params.adjustCharges = False
 
-MetalNon_Hg = "[#3,#11,#12,#19,#13,#21,#22,#23,#24,#25,#26,#27,#28,#29,#30,#39,#40,#41,#42,#43,#44,#45,#46,#47,#48,#57,#72,#73,#74,#75,#76,#77,#78,#79,#80]~[B,#6,#14,#15,#33,#51,#16,#34,#52,Cl,Br,I,#85]"
+# Build MetalNon_Hg programmatically from TRANSITION_METALS_NUM so that future
+# additions to that list are reflected here automatically.
+_s_block = [3, 11, 12, 19, 13]
+_all_metals_num = _s_block + TRANSITION_METALS_NUM
+MetalNon_Hg = (
+    "[" + ",".join(f"#{n}" for n in _all_metals_num) + "]"
+    "~[B,#6,#14,#15,#33,#51,#16,#34,#52,Cl,Br,I,#85]"
+)
 
 pt = GetPeriodicTable
 
@@ -120,6 +175,23 @@ atomic_valence_electrons[47] = 11  # Ag
 atomic_valence_electrons[48] = 12  # Cd
 
 atomic_valence_electrons[57] = 3  # La
+
+# Lanthanides — 4f electrons treated as core-like; dominant +3 chemistry.
+# Note: only used in get_proposed_ligand_charge() which runs on metal-free fragments.
+atomic_valence_electrons[58] = 3   # Ce
+atomic_valence_electrons[59] = 3   # Pr
+atomic_valence_electrons[60] = 3   # Nd
+atomic_valence_electrons[61] = 3   # Pm
+atomic_valence_electrons[62] = 3   # Sm
+atomic_valence_electrons[63] = 3   # Eu
+atomic_valence_electrons[64] = 3   # Gd
+atomic_valence_electrons[65] = 3   # Tb
+atomic_valence_electrons[66] = 3   # Dy
+atomic_valence_electrons[67] = 3   # Ho
+atomic_valence_electrons[68] = 3   # Er
+atomic_valence_electrons[69] = 3   # Tm
+atomic_valence_electrons[70] = 3   # Yb
+
 atomic_valence_electrons[72] = 4  # Hf
 atomic_valence_electrons[73] = 5  # Ta
 atomic_valence_electrons[74] = 6  # W
@@ -129,6 +201,24 @@ atomic_valence_electrons[77] = 9  # Ir
 atomic_valence_electrons[78] = 10  # Pt
 atomic_valence_electrons[79] = 11  # Au
 atomic_valence_electrons[80] = 12  # Hg
+
+# Actinides — notional bonding electron counts; early actinides are more covalent.
+# Note: only used in get_proposed_ligand_charge() which runs on metal-free fragments.
+atomic_valence_electrons[89] = 3   # Ac
+atomic_valence_electrons[90] = 4   # Th
+atomic_valence_electrons[91] = 5   # Pa
+atomic_valence_electrons[92] = 6   # U
+atomic_valence_electrons[93] = 7   # Np
+atomic_valence_electrons[94] = 8   # Pu
+atomic_valence_electrons[95] = 3   # Am (treated like lanthanide)
+atomic_valence_electrons[96] = 3   # Cm
+atomic_valence_electrons[97] = 3   # Bk
+atomic_valence_electrons[98] = 3   # Cf
+atomic_valence_electrons[99] = 3   # Es
+atomic_valence_electrons[100] = 3  # Fm
+atomic_valence_electrons[101] = 3  # Md
+atomic_valence_electrons[102] = 3  # No
+atomic_valence_electrons[103] = 3  # Lr
 
 
 def shell(cmd, shell=False):
@@ -160,9 +250,8 @@ def fix_NO2(smiles):
     """
     m = Chem.MolFromSmiles(smiles)
     emol = Chem.RWMol(m)
-    patt = Chem.MolFromSmarts(
-        "[#8-]-[#7+0]-[#8-].[#21,#22,#23,#24,#25,#26,#27,#28,#29,#30,#39,#40,#41,#42,#43,#44,#45,#46,#47,#48,#57,#72,#73,#74,#75,#76,#77,#78,#79,#80]"
-    )
+    _metal_smarts = ",".join(f"#{n}" for n in TRANSITION_METALS_NUM)
+    patt = Chem.MolFromSmarts(f"[#8-]-[#7+0]-[#8-].[{_metal_smarts}]")
     matches = emol.GetSubstructMatches(patt)
     for a1, a2, a3, a4 in matches:
         if not emol.GetBondBetweenAtoms(a1, a4) and not emol.GetBondBetweenAtoms(a3, a4):
@@ -230,6 +319,9 @@ def get_proposed_ligand_charge(ligand_mol, cutoff=-10):
     and omparing with total number of valence electrons. If charge is >=
     1 (<-1) and the LUMO (HOMO) is low (high) in energy, two additional
     electrons are added (removed). The suggested charge is returned.
+
+    NOTE: This runs on metal-free ligand fragments only (after MetalDisconnector
+    separates the metal). The EHT cutoff is independent of metal identity.
     """
     valence_electrons = 0
     passed, result = rdEHTTools.RunMol(ligand_mol)
@@ -538,6 +630,10 @@ def get_tmc_mol(xyz_file, overall_charge, with_stereo=False):
     cut_atoms = []
     for i, j in combinations(coordinating_atoms_idx, 2):
         bond = emol.GetBondBetweenAtoms(int(i), int(j))
+        # NOTE: 0.4 Å threshold calibrated for d-block metals. For lanthanides/
+        # actinides with longer M-L bonds, relative distances within haptic rings
+        # should still be comparable. May need adjustment if haptic atoms are
+        # incorrectly pruned for f-block complexes.
         if bond and abs(dMat[i, tm_idx] - dMat[j, tm_idx]) >= 0.4:
             logger.debug(
                 "Haptic bond pattern with too great distance:",
