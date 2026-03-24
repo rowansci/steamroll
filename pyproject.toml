@@ -2,7 +2,7 @@
 name = "steamroll"
 description = "Package to convert 3D molecules to RDKit"
 license = {file = "LICENSE"}
-version = "0.0.5"
+version = "0.0.6"
 readme = "README.md"
 keywords = []
 authors = [
@@ -14,7 +14,6 @@ dependencies = [
     "rdkit",
     "numpy",
     "networkx",
-    "scipy",
 ]
 
 [dependency-groups]
