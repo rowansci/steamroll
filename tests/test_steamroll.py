@@ -188,6 +188,9 @@ def test_smiles_mismatch_raises() -> None:
 @pytest.mark.parametrize(
     "smiles",
     [
+        "C=[N+]=[N-]",  # diazomethane (formal charges)
+        "C[N+](=O)[O-]",  # nitromethane (formal charges)
+        "[NH3+]CC(=O)[O-]",  # glycine zwitterion
         "C12C3C4C1C5C4C3C25",  # cubane
         "C1C2CC3CC1CC(C2)C3",  # adamantane
         "c1cc2ccc3ccc4ccc5ccc1c1c2c3c4c51",  # corannulene
