@@ -12,6 +12,30 @@ from steamroll.steamroll import ATOMIC_NUMBERS, SteamrollTopologyMismatchError, 
 
 _BROMOBENZENE_SMILES = "Brc1ccccc1"
 
+# Naphthalene: all-carbon fused ring; a pathological case for centroid-based atom mapping.
+_NAPHTHALENE_SMILES = "c1ccc2ccccc2c1"
+_NAPHTHALENE_ATOMIC_NUMBERS = [6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 1, 1, 1, 1, 1, 1, 1, 1]
+_NAPHTHALENE_COORDS = [
+    [0.000, 0.718, 0.000],  # C4a (junction)
+    [0.000, -0.718, 0.000],  # C8a (junction)
+    [1.230, 1.399, 0.000],  # C1
+    [2.459, 0.718, 0.000],  # C2
+    [2.459, -0.718, 0.000],  # C3
+    [1.230, -1.399, 0.000],  # C4
+    [-1.230, -1.399, 0.000],  # C5
+    [-2.459, -0.718, 0.000],  # C6
+    [-2.459, 0.718, 0.000],  # C7
+    [-1.230, 1.399, 0.000],  # C8
+    [1.230, 2.480, 0.000],  # H on C1
+    [3.393, 1.247, 0.000],  # H on C2
+    [3.393, -1.247, 0.000],  # H on C3
+    [1.230, -2.480, 0.000],  # H on C4
+    [-1.230, -2.480, 0.000],  # H on C5
+    [-3.393, -1.247, 0.000],  # H on C6
+    [-3.393, 1.247, 0.000],  # H on C7
+    [-1.230, 2.480, 0.000],  # H on C8
+]
+
 # Bromobenzene with C-Br shrunk to 1.3 Å (normal ~1.9 Å); pulls Br into
 # bonding range of the ortho carbons, causing DetermineConnectivity to mis-bond.
 _BROMOBENZENE_DISTORTED_ATOMIC_NUMBERS = [35, 6, 6, 6, 6, 6, 6, 1, 1, 1, 1, 1]
@@ -129,6 +153,30 @@ def test_smiles_distorted_halogen() -> None:
         )
     )
     np.testing.assert_allclose(input_heavy, output_heavy, atol=1e-3)
+
+
+def test_smiles_fused_ring() -> None:
+    """SMILES-based conversion correctly maps atoms in fused ring systems."""
+    ref_smiles = Chem.MolToSmiles(Chem.MolFromSmiles(_NAPHTHALENE_SMILES), isomericSmiles=False)
+    rdkm = to_rdkit(
+        _NAPHTHALENE_ATOMIC_NUMBERS,
+        _NAPHTHALENE_COORDS,
+        smiles=_NAPHTHALENE_SMILES,
+        remove_Hs=False,
+    )
+    assert Chem.MolToSmiles(Chem.RemoveHs(rdkm), isomericSmiles=False) == ref_smiles
+
+    # Verify bond lengths match naphthalene geometry; wrong atom assignments
+    # produce C-C bonds at ~2.4 Å and C-H bonds at ~7 Å.
+    conf = rdkm.GetConformer()
+    for bond in rdkm.GetBonds():
+        i, j = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
+        d = conf.GetAtomPosition(i).Distance(conf.GetAtomPosition(j))
+        is_ch = {rdkm.GetAtomWithIdx(i).GetAtomicNum(), rdkm.GetAtomWithIdx(j).GetAtomicNum()} == {
+            6,
+            1,
+        }
+        assert d < (1.3 if is_ch else 1.6), f"Bond {i}-{j}: {d:.2f} Å"
 
 
 def test_smiles_mismatch_raises() -> None:

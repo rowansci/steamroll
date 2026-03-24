@@ -3,15 +3,14 @@
 import logging
 import os
 import tempfile
-from collections import Counter, defaultdict
+from collections import Counter
 from typing import Iterable
 
 import numpy as np
 from numpy.typing import ArrayLike
 from rdkit import Chem
-from rdkit.Chem import AllChem
+from rdkit.Chem import rdDetermineBonds
 from rdkit.Geometry import Point3D
-from scipy.optimize import linear_sum_assignment
 
 from .xyz2mol.xyz2mol import xyz2mol
 from .xyz2mol_tmc.xyz2mol_local import xyz2AC_obabel as xyz2ac_obabel
@@ -99,11 +98,9 @@ def _from_smiles_and_coords(
 ) -> Chem.rdchem.Mol:
     """Build an RDKit mol using SMILES for topology and XYZ for 3D coordinates.
 
-    Uses topology-driven BFS propagation with per-element optimal assignment to
-    map template atoms to XYZ positions without relying on bond perception.
-    Unique-element atoms serve as unambiguous anchors; the molecular graph then
-    constrains candidates, and minimum-weight bipartite matching resolves
-    ambiguity globally rather than greedily.
+    Uses DetermineConnectivity + bond-type-agnostic substructure match to map XYZ
+    atoms onto the SMILES template. The result is built from the template, so extra
+    bonds from distorted geometry never appear in the output.
 
     Args:
         smiles: SMILES string encoding the molecular topology.
@@ -114,7 +111,8 @@ def _from_smiles_and_coords(
         RDKit molecule with SMILES topology and XYZ coordinates.
 
     Raises:
-        ValueError: if SMILES is invalid, atom counts don't match, or elements differ.
+        ValueError: if SMILES is invalid, atom counts don't match, elements differ,
+            or no valid atom mapping can be found.
     """
     template = Chem.MolFromSmiles(smiles)
     if template is None:
@@ -126,86 +124,38 @@ def _from_smiles_and_coords(
         raise ValueError(f"Atom count mismatch: SMILES has {n}, XYZ has {len(atomic_numbers)}")
 
     xyz_pos = np.array(coordinates)
-    t_elems = [template.GetAtomWithIdx(i).GetAtomicNum() for i in range(n)]
-    x_elems = list(atomic_numbers)
 
-    if Counter(t_elems) != Counter(x_elems):
+    if Counter(template.GetAtomWithIdx(i).GetAtomicNum() for i in range(n)) != Counter(
+        atomic_numbers
+    ):
         raise ValueError("Element mismatch between SMILES and XYZ")
 
-    t_by_elem: dict[int, list[int]] = defaultdict(list)
-    x_by_elem: dict[int, list[int]] = defaultdict(list)
-    for i in range(n):
-        t_by_elem[t_elems[i]].append(i)
-        x_by_elem[x_elems[i]].append(i)
+    raw = Chem.RWMol()
+    raw_conf = Chem.Conformer(n)
+    for i, z in enumerate(atomic_numbers):
+        raw.AddAtom(Chem.Atom(z))
+        raw_conf.SetAtomPosition(i, Point3D(*xyz_pos[i].tolist()))
+    raw.AddConformer(raw_conf, assignId=True)
+    rdDetermineBonds.DetermineConnectivity(raw)
 
-    # Unique-element atoms are unambiguous anchors
-    atom_map: dict[int, int] = {}
-    for elem, t_indices_for_elem in t_by_elem.items():
-        if len(t_indices_for_elem) == 1:
-            atom_map[t_indices_for_elem[0]] = x_by_elem[elem][0]
+    # Strip bond types so the query matches raw's all-SINGLE bonds; explicit Hs
+    # disambiguate symmetric atoms (e.g., ipso vs ortho carbons differ in H count).
+    query = Chem.RWMol(template)
+    for atom in query.GetAtoms():
+        atom.SetIsAromatic(False)
+        atom.SetNoImplicit(True)
+    for bond in query.GetBonds():
+        bond.SetBondType(Chem.BondType.SINGLE)
+        bond.SetIsAromatic(False)
 
-    # BFS: expand frontier along bonds, assign each layer with min-weight bipartite matching
-    changed = True
-    while changed:
-        changed = False
+    match = raw.GetSubstructMatch(query)
+    if not match or len(match) != n:
+        raise ValueError("Could not find a valid atom mapping between SMILES and XYZ")
 
-        frontier: dict[int, list[tuple[int, np.ndarray]]] = defaultdict(list)
-        for t_idx in range(n):
-            if t_idx in atom_map:
-                continue
-            elem = t_elems[t_idx]
-            mapped_nbr_positions = [
-                xyz_pos[atom_map[nbr.GetIdx()]]
-                for nbr in template.GetAtomWithIdx(t_idx).GetNeighbors()
-                if nbr.GetIdx() in atom_map
-            ]
-            if mapped_nbr_positions:
-                frontier[elem].append((t_idx, np.mean(mapped_nbr_positions, axis=0)))
-
-        for elem, candidates in frontier.items():
-            unmapped_x = [x for x in x_by_elem[elem] if x not in atom_map.values()]
-            if not unmapped_x:
-                continue
-
-            cost = np.array(
-                [
-                    [float(np.linalg.norm(xyz_pos[x_idx] - ref)) for x_idx in unmapped_x]
-                    for _, ref in candidates
-                ]
-            )
-            row_ind, col_ind = linear_sum_assignment(cost)
-            for r, c in zip(row_ind, col_ind, strict=True):
-                atom_map[candidates[r][0]] = unmapped_x[c]
-                changed = True
-
-    # Fallback for atoms disconnected from all anchors (rare): embed and match
-    unmapped_t = [i for i in range(n) if i not in atom_map]
-    if unmapped_t:
-        coord_map = {t_idx: Point3D(*xyz_pos[x_idx].tolist()) for t_idx, x_idx in atom_map.items()}
-        AllChem.EmbedMolecule(template, randomSeed=42, coordMap=coord_map)  # type: ignore [attr-defined]
-        t_pos = np.array([list(template.GetConformer().GetAtomPosition(i)) for i in range(n)])
-
-        by_elem: dict[int, tuple[list[int], list[int]]] = {}
-        for t_idx in unmapped_t:
-            elem = t_elems[t_idx]
-            if elem not in by_elem:
-                by_elem[elem] = ([], [x for x in x_by_elem[elem] if x not in atom_map.values()])
-            by_elem[elem][0].append(t_idx)
-
-        for _elem, (t_indices, x_indices) in by_elem.items():
-            cost = np.array(
-                [
-                    [float(np.linalg.norm(t_pos[t_idx] - xyz_pos[x_idx])) for x_idx in x_indices]
-                    for t_idx in t_indices
-                ]
-            )
-            row_ind, col_ind = linear_sum_assignment(cost)
-            for r, c in zip(row_ind, col_ind, strict=True):
-                atom_map[t_indices[r]] = x_indices[c]
-
+    # Copy coordinates onto template; only SMILES bonds appear in the result.
     conf = Chem.Conformer(n)
     for t_idx in range(n):
-        conf.SetAtomPosition(t_idx, Point3D(*xyz_pos[atom_map[t_idx]].tolist()))
+        conf.SetAtomPosition(t_idx, Point3D(*xyz_pos[match[t_idx]].tolist()))
     template.RemoveAllConformers()
     template.AddConformer(conf, assignId=True)
     return template
@@ -226,7 +176,7 @@ def _smiles_matches(mol: Chem.rdchem.Mol, smiles: str) -> bool:
         if ref is None:
             return False
         Chem.SanitizeMol(mol)
-        # isomericSmiles=False strips stereo/isotopes — we only care about connectivity
+        # isomericSmiles=False: only check connectivity, not stereo/isotopes
         got = Chem.MolToSmiles(Chem.RemoveHs(mol), isomericSmiles=False)
         return got == Chem.MolToSmiles(ref, isomericSmiles=False)
     except Exception:
