@@ -138,12 +138,11 @@ def _from_smiles_and_coords(
     raw.AddConformer(raw_conf, assignId=True)
     rdDetermineBonds.DetermineConnectivity(raw)
 
-    # Strip bond types so the query matches raw's all-SINGLE bonds; explicit Hs
-    # disambiguate symmetric atoms (e.g., ipso vs ortho carbons differ in H count).
+    # Strip charges, isotopes, and bond orders to match raw's bare atoms.
     query = Chem.RWMol(template)
     for atom in query.GetAtoms():
-        atom.SetIsAromatic(False)
-        atom.SetNoImplicit(True)
+        atom.SetFormalCharge(0)
+        atom.SetIsotope(0)
     for bond in query.GetBonds():
         bond.SetBondType(Chem.BondType.SINGLE)
         bond.SetIsAromatic(False)
