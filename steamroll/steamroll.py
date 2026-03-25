@@ -12,6 +12,7 @@ from rdkit import Chem
 from rdkit.Chem import rdDetermineBonds
 from rdkit.Geometry import Point3D
 
+from .utils import strip_to_connectivity
 from .xyz2mol.xyz2mol import xyz2mol
 from .xyz2mol_tmc.xyz2mol_local import xyz2AC_obabel as xyz2ac_obabel
 from .xyz2mol_tmc.xyz2mol_tmc import TRANSITION_METALS_NUM, get_tmc_mol
@@ -138,16 +139,7 @@ def _from_smiles_and_coords(
     raw.AddConformer(raw_conf, assignId=True)
     rdDetermineBonds.DetermineConnectivity(raw)
 
-    # Strip charges, isotopes, and bond orders to match raw's bare atoms.
-    query = Chem.RWMol(template)
-    for atom in query.GetAtoms():
-        atom.SetFormalCharge(0)
-        atom.SetIsotope(0)
-    for bond in query.GetBonds():
-        bond.SetBondType(Chem.BondType.SINGLE)
-        bond.SetIsAromatic(False)
-
-    match = raw.GetSubstructMatch(query)
+    match = raw.GetSubstructMatch(strip_to_connectivity(template))
     if not match or len(match) != n:
         raise ValueError("Could not find a valid atom mapping between SMILES and XYZ")
 
@@ -254,7 +246,7 @@ def to_rdkit(
             os.unlink(xyz_file)
         if rdkm is None:
             raise SteamrollConversionError("xyz2mol_tm returned no molecule")
-        return Chem.AddHs(rdkm)
+        return remove_hydrogens(rdkm) if remove_Hs else Chem.AddHs(rdkm, addCoords=True)
 
     def _topology_ok(mol: Chem.rdchem.Mol) -> bool:
         return smiles is None or _smiles_matches(mol, smiles)

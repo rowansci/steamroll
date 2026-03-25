@@ -19,6 +19,7 @@ from rdkit import Chem
 from rdkit.Chem import GetPeriodicTable, rdchem, rdEHTTools, rdmolops
 from rdkit.Chem.MolStandardize import rdMolStandardize
 
+from ..utils import strip_to_connectivity
 from .xyz2mol_local import (
     AC2mol,
     chiral_stereo_check,
@@ -667,6 +668,18 @@ def get_tmc_mol(xyz_file, overall_charge, with_stereo=False):
     Chem.SanitizeMol(tmc_mol)
     if with_stereo:
         chiral_stereo_check(tmc_mol)
+
+    # Re-attach 3D coords lost in the SMILES roundtrip; strip bonds on both sides to match.
+    emol_mol = emol.GetMol()
+    if emol_mol.GetNumConformers() > 0:
+        match = strip_to_connectivity(emol_mol).GetSubstructMatch(strip_to_connectivity(tmc_mol))
+        if match:
+            emol_conf = emol_mol.GetConformer()
+            conf = Chem.Conformer(tmc_mol.GetNumAtoms())
+            for i, emol_idx in enumerate(match):
+                conf.SetAtomPosition(i, emol_conf.GetAtomPosition(emol_idx))
+            tmc_mol.AddConformer(conf, assignId=True)
+
     return tmc_mol
 
 
