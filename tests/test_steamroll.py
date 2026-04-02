@@ -8,7 +8,13 @@ import pytest
 from rdkit import Chem
 from rdkit.Chem import AllChem
 
-from steamroll.steamroll import ATOMIC_NUMBERS, SteamrollTopologyMismatchError, fragment, to_rdkit
+from steamroll.steamroll import (
+    ATOMIC_NUMBERS,
+    SteamrollTopologyMismatchError,
+    _from_smiles_and_coords,
+    fragment,
+    to_rdkit,
+)
 
 _BROMOBENZENE_SMILES = "Brc1ccccc1"
 _NAPHTHALENE_SMILES = "c1ccc2ccccc2c1"
@@ -172,6 +178,75 @@ def test_smiles_high_symmetry(smiles: str) -> None:
     assert Chem.MolToSmiles(Chem.RemoveHs(rdkm), isomericSmiles=False) == Chem.MolToSmiles(
         ref, isomericSmiles=False
     )
+
+
+def test_from_smiles_and_coords_xyz_order() -> None:
+    """_from_smiles_and_coords returns atoms in XYZ input order, not SMILES order.
+
+    Water: SMILES "O" expands to O, H, H (oxygen first).  The XYZ supplies atoms
+    in H, O, H order.  After the fix atom 0 must be H at (0,0,0), atom 1 must be
+    O at (0,0,1), and atom 2 must be H at (0,1,1).
+    """
+    # XYZ order: H, O, H  (deliberately different from SMILES O-H-H order)
+    atomic_numbers = [1, 8, 1]
+    coordinates = [[0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 1.0]]
+    mol = _from_smiles_and_coords("O", atomic_numbers, coordinates)
+    conf = mol.GetConformer()
+    for i, (z, coord) in enumerate(zip(atomic_numbers, coordinates, strict=True)):
+        assert mol.GetAtomWithIdx(i).GetAtomicNum() == z, f"atom {i}: wrong element"
+        pos = conf.GetAtomPosition(i)
+        np.testing.assert_allclose(
+            [pos.x, pos.y, pos.z], coord, atol=1e-6, err_msg=f"atom {i}: wrong position"
+        )
+
+
+def test_from_smiles_and_coords_charges_preserved() -> None:
+    """Formal charges from SMILES are transferred to the correct XYZ-ordered atoms.
+
+    Glycine zwitterion [NH3+]CC(=O)[O-]: the positive charge belongs to N and the
+    negative charge to one O.  We give coordinates in an order that differs from the
+    SMILES template and verify the charges end up on the right elements.
+    """
+    # Build a reference mol with 3D coords in RDKit's own order
+    smiles = "[NH3+]CC(=O)[O-]"
+    ref = Chem.AddHs(Chem.MolFromSmiles(smiles))
+    AllChem.EmbedMolecule(ref, randomSeed=0)  # type: ignore[attr-defined]
+    atomic_numbers = [a.GetAtomicNum() for a in ref.GetAtoms()]
+    conf_ref = ref.GetConformer()
+    coordinates = [
+        [
+            conf_ref.GetAtomPosition(i).x,
+            conf_ref.GetAtomPosition(i).y,
+            conf_ref.GetAtomPosition(i).z,
+        ]
+        for i in range(ref.GetNumAtoms())
+    ]
+
+    # Shuffle input order so it differs from the SMILES template order
+    rng = np.random.default_rng(42)
+    perm = rng.permutation(len(atomic_numbers)).tolist()
+    shuffled_nums = [atomic_numbers[p] for p in perm]
+    shuffled_coords = [coordinates[p] for p in perm]
+
+    mol = _from_smiles_and_coords(smiles, shuffled_nums, shuffled_coords)
+    result_conf = mol.GetConformer()
+
+    # Every atom's position must match its shuffled input coordinate
+    for i in range(mol.GetNumAtoms()):
+        pos = result_conf.GetAtomPosition(i)
+        np.testing.assert_allclose(
+            [pos.x, pos.y, pos.z],
+            shuffled_coords[i],
+            atol=1e-6,
+            err_msg=f"atom {i}: wrong position",
+        )
+
+    # Formal charges must land on the right elements
+    charges_by_element: dict[int, list[int]] = {}
+    for atom in mol.GetAtoms():
+        charges_by_element.setdefault(atom.GetAtomicNum(), []).append(atom.GetFormalCharge())
+    assert 1 in charges_by_element[7], "N should have +1 formal charge"
+    assert -1 in charges_by_element[8], "one O should have -1 formal charge"
 
 
 def test_tmc_conformer_preserved() -> None:

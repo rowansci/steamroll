@@ -143,13 +143,29 @@ def _from_smiles_and_coords(
     if not match or len(match) != n:
         raise ValueError("Could not find a valid atom mapping between SMILES and XYZ")
 
-    # Copy coordinates onto template; only SMILES bonds appear in the result.
-    conf = Chem.Conformer(n)
-    for t_idx in range(n):
-        conf.SetAtomPosition(t_idx, Point3D(*xyz_pos[match[t_idx]].tolist()))
-    template.RemoveAllConformers()
-    template.AddConformer(conf, assignId=True)
-    return template
+    # Build result with atoms in XYZ order; bonds/charges come from template.
+    # match[t_idx] = raw_idx, so inv_match[raw_idx] = t_idx.
+    inv_match = [0] * n
+    for t_idx, r_idx in enumerate(match):
+        inv_match[r_idx] = t_idx
+
+    result = Chem.RWMol()
+    result_conf = Chem.Conformer(n)
+    for raw_idx, t_idx in enumerate(inv_match):
+        new_atom = Chem.Atom(atomic_numbers[raw_idx])
+        new_atom.SetFormalCharge(template.GetAtomWithIdx(t_idx).GetFormalCharge())
+        result.AddAtom(new_atom)
+        result_conf.SetAtomPosition(raw_idx, Point3D(*xyz_pos[raw_idx].tolist()))
+    result.AddConformer(result_conf, assignId=True)
+
+    for bond in template.GetBonds():
+        result.AddBond(
+            match[bond.GetBeginAtomIdx()],
+            match[bond.GetEndAtomIdx()],
+            bond.GetBondType(),
+        )
+
+    return result.GetMol()
 
 
 def _smiles_matches(mol: Chem.rdchem.Mol, smiles: str) -> bool:
