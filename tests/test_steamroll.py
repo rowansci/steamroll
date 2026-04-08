@@ -8,12 +8,14 @@ import pytest
 from rdkit import Chem
 from rdkit.Chem import AllChem
 
+from steamroll import (
+    SteamrollTopologyMismatchError,
+    to_rdkit,
+)
 from steamroll.steamroll import (
     ATOMIC_NUMBERS,
-    SteamrollTopologyMismatchError,
     _from_smiles_and_coords,
     fragment,
-    to_rdkit,
 )
 
 _BROMOBENZENE_SMILES = "Brc1ccccc1"
