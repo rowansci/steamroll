@@ -169,7 +169,7 @@ def _from_smiles_and_coords(
 
 
 def _smiles_matches(mol: Chem.rdchem.Mol, smiles: str) -> bool:
-    """Check whether an RDKit molecule's topology matches a SMILES string.
+    """Check whether an RDKit molecule matches a non-isomeric SMILES string.
 
     Args:
         mol: RDKit molecule to validate.
@@ -183,7 +183,7 @@ def _smiles_matches(mol: Chem.rdchem.Mol, smiles: str) -> bool:
         if ref is None:
             return False
         Chem.SanitizeMol(mol)
-        # isomericSmiles=False: only check connectivity, not stereo/isotopes
+        # isomericSmiles=False ignores stereo and isotope differences.
         got = Chem.MolToSmiles(Chem.RemoveHs(mol), isomericSmiles=False)
         return got == Chem.MolToSmiles(ref, isomericSmiles=False)
     except Exception:

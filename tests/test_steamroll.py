@@ -17,6 +17,7 @@ from steamroll.steamroll import (
     _from_smiles_and_coords,
     fragment,
 )
+from steamroll.utils import strip_to_connectivity
 
 _BROMOBENZENE_SMILES = "Brc1ccccc1"
 _NAPHTHALENE_SMILES = "c1ccc2ccccc2c1"
@@ -145,6 +146,17 @@ def test_smiles_mismatch_raises() -> None:
     """Raises SteamrollTopologyMismatchError when no method can match the provided SMILES."""
     with pytest.raises(SteamrollTopologyMismatchError):
         to_rdkit([1, 8, 1], [[0, 0, 0], [0, 0, 1], [0, 1, 1]], smiles="CC")
+
+
+def test_strip_to_connectivity_clears_radicals_and_aromaticity() -> None:
+    """Connectivity-only matching ignores radical and aromatic annotations."""
+    radical = strip_to_connectivity(Chem.MolFromSmiles("[CH3]"))
+    assert radical.GetAtomWithIdx(0).GetNumRadicalElectrons() == 0
+
+    aromatic = strip_to_connectivity(Chem.MolFromSmiles("c1ccccc1"))
+    assert all(not atom.GetIsAromatic() for atom in aromatic.GetAtoms())
+    assert all(not bond.GetIsAromatic() for bond in aromatic.GetBonds())
+    assert all(bond.GetBondType() == Chem.BondType.SINGLE for bond in aromatic.GetBonds())
 
 
 @pytest.mark.parametrize(
