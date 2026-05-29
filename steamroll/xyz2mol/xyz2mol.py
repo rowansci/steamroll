@@ -101,6 +101,11 @@ atomic_valence_electrons[32] = 4
 atomic_valence_electrons[35] = 7
 atomic_valence_electrons[53] = 7
 
+UNWANTED_CHARGE_PENALTY = 8
+TOTAL_CHARGE_PENALTY = 1
+BOND_ORDER_REWARD = 1
+VALID_ASSIGNMENT_REWARD = 42
+
 
 def str_atom(atom):
     """
@@ -441,6 +446,9 @@ def get_UA_pairs(UA, AC, use_graph=True):
 def get_charge_penalty(BO, AC, atoms, atomic_valence_electrons, status):
     """
     Score bond-order assignments by preferring fewer and more plausible formal charges.
+
+    These empirical weights rank alternate xyz2mol assignments; they are not
+    physical energies or calibrated chemistry scores.
     """
     BO_valences = list(BO.sum(axis=1))
     AC_valences = list(AC.sum(axis=1))
@@ -461,10 +469,10 @@ def get_charge_penalty(BO, AC, atoms, atomic_valence_electrons, status):
         if atom == 16 and BO_valences[index] == 4 and AC_valences[index] == 2:
             penalty += 3
 
-    penalty += 8 * num_unwanted_charges
-    penalty += num_atomic_charges
-    penalty -= BO.sum()
-    penalty -= 42 * int(status)
+    penalty += UNWANTED_CHARGE_PENALTY * num_unwanted_charges
+    penalty += TOTAL_CHARGE_PENALTY * num_atomic_charges
+    penalty -= BOND_ORDER_REWARD * BO.sum()
+    penalty -= VALID_ASSIGNMENT_REWARD * int(status)
     return penalty
 
 
