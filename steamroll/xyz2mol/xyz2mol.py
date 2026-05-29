@@ -80,7 +80,7 @@ atomic_valence[8] = [2,1,3]
 atomic_valence[9] = [1]
 atomic_valence[14] = [4]
 atomic_valence[15] = [5,3] #[5,4,3]
-atomic_valence[16] = [6,3,2] #[6,4,2]
+atomic_valence[16] = [6,4,3,2]
 atomic_valence[17] = [1]
 atomic_valence[32] = [4]
 atomic_valence[35] = [1]
@@ -100,6 +100,11 @@ atomic_valence_electrons[17] = 7
 atomic_valence_electrons[32] = 4
 atomic_valence_electrons[35] = 7
 atomic_valence_electrons[53] = 7
+
+UNWANTED_CHARGE_PENALTY = 8
+TOTAL_CHARGE_PENALTY = 1
+BOND_ORDER_REWARD = 1
+VALID_ASSIGNMENT_REWARD = 42
 
 
 def str_atom(atom):
@@ -233,7 +238,7 @@ def get_atomic_charge(atom, atomic_valence_electrons, BO_valence):
         charge = 3 - BO_valence
     elif atom == 15 and BO_valence == 5:
         charge = 0
-    elif atom == 16 and BO_valence == 6:
+    elif atom == 16 and BO_valence in [4, 6]:
         charge = 0
     else:
         charge = atomic_valence_electrons - 8 + BO_valence
@@ -438,7 +443,41 @@ def get_UA_pairs(UA, AC, use_graph=True):
     return UA_pairs
 
 
-def AC2BO(AC, atoms, charge, allow_charged_fragments=True, use_graph=True):
+def get_charge_penalty(BO, AC, atoms, atomic_valence_electrons, status):
+    """
+    Score bond-order assignments by preferring fewer and more plausible formal charges.
+
+    These empirical weights rank alternate xyz2mol assignments; they are not
+    physical energies or calibrated chemistry scores.
+    """
+    BO_valences = list(BO.sum(axis=1))
+    AC_valences = list(AC.sum(axis=1))
+    num_atomic_charges = 0
+    num_unwanted_charges = 0
+    penalty = 0
+
+    for index, atom in enumerate(atoms):
+        current_charge = get_atomic_charge(
+            atom,
+            atomic_valence_electrons[atom],
+            BO_valences[index])
+        num_atomic_charges += abs(current_charge)
+        is_positive_nitrogen = atom == 7 and current_charge == 1
+        is_negative_oxygen = atom == 8 and current_charge == -1
+        if not (is_positive_nitrogen or is_negative_oxygen):
+            num_unwanted_charges += abs(current_charge)
+        if atom == 16 and BO_valences[index] == 4 and AC_valences[index] == 2:
+            penalty += 3
+
+    penalty += UNWANTED_CHARGE_PENALTY * num_unwanted_charges
+    penalty += TOTAL_CHARGE_PENALTY * num_atomic_charges
+    penalty -= BOND_ORDER_REWARD * BO.sum()
+    penalty -= VALID_ASSIGNMENT_REWARD * int(status)
+    return penalty
+
+
+def AC2BO(AC, atoms, charge, allow_charged_fragments=True, use_graph=True,
+          penalize_charge=False):
     """
 
     implemenation of algorithm shown in Figure 2
@@ -469,6 +508,7 @@ def AC2BO(AC, atoms, charge, allow_charged_fragments=True, use_graph=True):
     valences_list = itertools.product(*valences_list_of_lists)
 
     best_BO = AC.copy()
+    lowest_penalty = sys.maxsize
 
     for valences in valences_list:
 
@@ -482,8 +522,13 @@ def AC2BO(AC, atoms, charge, allow_charged_fragments=True, use_graph=True):
         else:
             check_bo = None
 
-        if check_len and check_bo:
+        if check_len and check_bo and not penalize_charge:
             return AC, atomic_valence_electrons
+        if check_len and check_bo:
+            penalty = get_charge_penalty(AC, AC, atoms, atomic_valence_electrons, True)
+            if penalty < lowest_penalty:
+                lowest_penalty = penalty
+                best_BO = AC.copy()
 
         UA_pairs_list = get_UA_pairs(UA, AC, use_graph=use_graph)
         for UA_pairs in UA_pairs_list:
@@ -494,8 +539,15 @@ def AC2BO(AC, atoms, charge, allow_charged_fragments=True, use_graph=True):
             charge_OK = charge_is_OK(BO, AC, charge, DU_from_AC, atomic_valence_electrons, atoms, valences,
                                      allow_charged_fragments=allow_charged_fragments)
 
-            if status:
+            if status and not penalize_charge:
                 return BO, atomic_valence_electrons
+
+            if penalize_charge:
+                penalty = get_charge_penalty(
+                    BO, AC, atoms, atomic_valence_electrons, status)
+                if valences_not_too_large(BO, valences) and charge_OK and penalty < lowest_penalty:
+                    lowest_penalty = penalty
+                    best_BO = BO.copy()
             elif BO.sum() >= best_BO.sum() and valences_not_too_large(BO, valences) and charge_OK:
                 best_BO = BO.copy()
 
@@ -503,7 +555,7 @@ def AC2BO(AC, atoms, charge, allow_charged_fragments=True, use_graph=True):
 
 
 def AC2mol(mol, AC, atoms, charge, allow_charged_fragments=True,
-           use_graph=True, use_atom_maps=False):
+           use_graph=True, use_atom_maps=False, penalize_charge=False):
     """
     """
 
@@ -513,7 +565,8 @@ def AC2mol(mol, AC, atoms, charge, allow_charged_fragments=True,
         atoms,
         charge,
         allow_charged_fragments=allow_charged_fragments,
-        use_graph=use_graph)
+        use_graph=use_graph,
+        penalize_charge=penalize_charge)
 
     # add BO connectivity and charge info to mol object
     mol = BO2mol(
@@ -717,7 +770,7 @@ def chiral_stereo_check(mol):
 
 def xyz2mol(atoms, coordinates, charge=0, allow_charged_fragments=True,
             use_graph=True, use_huckel=False, embed_chiral=True,
-            use_atom_maps=False):
+            use_atom_maps=False, penalize_charge=False):
     """
     Generate a rdkit molobj from atoms, coordinates and a total_charge.
 
@@ -746,7 +799,8 @@ def xyz2mol(atoms, coordinates, charge=0, allow_charged_fragments=True,
     new_mols = AC2mol(mol, AC, atoms, charge,
                      allow_charged_fragments=allow_charged_fragments,
                      use_graph=use_graph,
-                     use_atom_maps=use_atom_maps)
+                     use_atom_maps=use_atom_maps,
+                     penalize_charge=penalize_charge)
 
     # Check for stereocenters and chiral centers
     if embed_chiral:
