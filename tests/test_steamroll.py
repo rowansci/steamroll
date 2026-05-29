@@ -54,6 +54,30 @@ def read_xyz(file: Path | str) -> tuple[list[int], list[list[float]], int]:
     return atomic_numbers, coordinates, charge
 
 
+def geometry_from_smiles(smiles: str, seed: int = 42) -> tuple[list[int], list[list[float]]]:
+    """Generate deterministic 3D coordinates for an explicit-hydrogen molecule."""
+    ref = Chem.MolFromSmiles(smiles)
+    assert ref is not None
+    mol_h = Chem.AddHs(ref)
+    assert AllChem.EmbedMolecule(mol_h, randomSeed=seed) == 0  # type: ignore[attr-defined]
+    AllChem.MMFFOptimizeMolecule(mol_h, maxIters=200)  # type: ignore[attr-defined]
+
+    conf = mol_h.GetConformer()
+    atomic_numbers = [a.GetAtomicNum() for a in mol_h.GetAtoms()]
+    coordinates = [
+        [conf.GetAtomPosition(i).x, conf.GetAtomPosition(i).y, conf.GetAtomPosition(i).z]
+        for i in range(mol_h.GetNumAtoms())
+    ]
+    return atomic_numbers, coordinates
+
+
+def canonical_smiles(mol: Chem.rdchem.Mol | str) -> str:
+    """Canonical non-isomeric heavy-atom SMILES."""
+    rdkm = Chem.MolFromSmiles(mol) if isinstance(mol, str) else Chem.RemoveHs(mol)
+    assert rdkm is not None
+    return Chem.MolToSmiles(rdkm, isomericSmiles=False)
+
+
 def test_steamroll() -> None:
     """Basic test to make sure the package is working."""
     rdkm = to_rdkit([1, 8, 1], [[0, 0, 0], [0, 0, 1], [0, 1, 1]])
@@ -83,6 +107,51 @@ def test_all_data(file: str) -> None:
     atomic_numbers, coordinates, charge = read_xyz(file)
     rdkm = to_rdkit(atomic_numbers, coordinates, charge=charge, remove_Hs=False)
     assert rdkm.GetNumAtoms() == len(atomic_numbers)
+
+
+@pytest.mark.parametrize(
+    ("name", "smiles", "charge", "expected_smiles"),
+    [
+        ("DMSO", "CS(C)=O", 0, "CS(C)=O"),
+        ("3-methylthiazolium", "C[n+]1ccsc1", 1, "C[n+]1ccsc1"),
+        ("2-thiophene carboxylic acid", "O=C(O)c1cccs1", 0, "O=C(O)c1cccs1"),
+    ],
+)
+def test_xyz_only_heteroatom_charge_regressions(
+    name: str,
+    smiles: str,
+    charge: int,
+    expected_smiles: str,
+) -> None:
+    """XYZ-only conversion prefers chemically reasonable heteroatom charges."""
+    atomic_numbers, coordinates = geometry_from_smiles(smiles, seed=17)
+    rdkm = to_rdkit(atomic_numbers, coordinates, charge=charge, remove_Hs=False)
+
+    assert canonical_smiles(rdkm) == canonical_smiles(expected_smiles), name
+
+    charges = {
+        (atom.GetSymbol(), atom.GetIdx()): atom.GetFormalCharge()
+        for atom in rdkm.GetAtoms()
+        if atom.GetFormalCharge()
+    }
+    if name == "DMSO":
+        assert charges == {}
+    elif name == "3-methylthiazolium":
+        assert any(
+            atom.GetAtomicNum() == 7 and atom.GetFormalCharge() == 1 for atom in rdkm.GetAtoms()
+        )
+        assert all(
+            atom.GetFormalCharge() == 0 for atom in rdkm.GetAtoms() if atom.GetAtomicNum() == 16
+        )
+
+
+def test_xyz_only_hypervalent_iodine_regression() -> None:
+    """Charge-penalized fallback must not remove existing hypervalent iodine support."""
+    atomic_numbers, coordinates, charge = read_xyz(DATA_DIR / "hypervalent_iodine.xyz")
+    rdkm = to_rdkit(atomic_numbers, coordinates, charge=charge, remove_Hs=False)
+
+    assert rdkm.GetNumAtoms() == len(atomic_numbers)
+    assert sum(atom.GetAtomicNum() == 53 for atom in rdkm.GetAtoms()) == 1
 
 
 def test_smiles_distorted_halogen() -> None:

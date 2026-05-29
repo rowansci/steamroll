@@ -190,6 +190,25 @@ def _smiles_matches(mol: Chem.rdchem.Mol, smiles: str) -> bool:
         return False
 
 
+def _formal_charge_penalty(mol: Chem.rdchem.Mol) -> int:
+    """Score formal charges for choosing between xyz2mol resonance assignments."""
+    penalty = 0
+    for atom in mol.GetAtoms():
+        formal_charge = atom.GetFormalCharge()
+        if formal_charge == 0:
+            continue
+        penalty += abs(formal_charge)
+        is_preferred_charge = (atom.GetAtomicNum(), formal_charge) in {(7, 1), (8, -1)}
+        if not is_preferred_charge:
+            penalty += 8 * abs(formal_charge)
+    return penalty
+
+
+def _has_unusual_formal_charge(mol: Chem.rdchem.Mol) -> bool:
+    """Return True when a fast xyz2mol result is worth re-scoring."""
+    return _formal_charge_penalty(mol) >= 8
+
+
 def to_rdkit(
     atomic_numbers: Iterable[int],
     coordinates: ArrayLike,
@@ -271,6 +290,20 @@ def to_rdkit(
         # xyz2mol (standard)
         try:
             candidate = xyz2mol(atomic_numbers, coords, charge=charge)[0]
+            if smiles is None and _has_unusual_formal_charge(candidate):
+                try:
+                    penalized_candidate = xyz2mol(
+                        atomic_numbers,
+                        coords,
+                        charge=charge,
+                        penalize_charge=True,
+                    )[0]
+                    if _formal_charge_penalty(penalized_candidate) < _formal_charge_penalty(
+                        candidate
+                    ):
+                        candidate = penalized_candidate
+                except Exception:
+                    logger.debug("charge-penalized xyz2mol failed, keeping fast result")
             if _topology_ok(candidate):
                 rdkm = candidate
             else:
@@ -282,6 +315,21 @@ def to_rdkit(
         if rdkm is None:
             try:
                 candidate = xyz2mol(atomic_numbers, coords, charge=charge, use_huckel=True)[0]
+                if smiles is None and _has_unusual_formal_charge(candidate):
+                    try:
+                        penalized_candidate = xyz2mol(
+                            atomic_numbers,
+                            coords,
+                            charge=charge,
+                            use_huckel=True,
+                            penalize_charge=True,
+                        )[0]
+                        if _formal_charge_penalty(penalized_candidate) < _formal_charge_penalty(
+                            candidate
+                        ):
+                            candidate = penalized_candidate
+                    except Exception:
+                        logger.debug("charge-penalized xyz2mol Hückel failed, keeping fast result")
                 if _topology_ok(candidate):
                     rdkm = candidate
                 else:
