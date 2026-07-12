@@ -332,6 +332,24 @@ def test_from_smiles_and_coords_charges_preserved() -> None:
     assert -1 in charges_by_element[8], "one O should have -1 formal charge"
 
 
+def test_from_smiles_and_coords_heavy_atom_only() -> None:
+    """_from_smiles_and_coords works when coordinates contain only heavy atoms (no H).
+
+    This is the typical case when loading from a PDB file: the XYZ has no explicit
+    H atoms, but the SMILES encodes bond orders for the heavy-atom skeleton.
+    """
+    # Ethanol heavy atoms only: C, C, O
+    smiles = "CCO"
+    atomic_numbers = [6, 6, 8]
+    # Rough heavy-atom geometry for ethanol
+    coordinates = [[0.0, 0.0, 0.0], [1.54, 0.0, 0.0], [2.4, 1.1, 0.0]]
+    mol = _from_smiles_and_coords(smiles, atomic_numbers, coordinates)
+    assert mol.GetNumAtoms() == 3
+    assert mol.GetNumBonds() == 2
+    elements = sorted(a.GetAtomicNum() for a in mol.GetAtoms())
+    assert elements == [6, 6, 8]
+
+
 def test_tmc_conformer_preserved() -> None:
     """to_rdkit preserves 3D coordinates for transition metal complexes.
 
