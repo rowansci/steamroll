@@ -92,6 +92,74 @@ def _write_temp_xyz(atomic_numbers: list[int], coordinates: list[list[float]]) -
     return f.name
 
 
+def _build_rwmol(
+    atomic_numbers: list[int],
+    coordinates: list[list[float]],
+) -> Chem.RWMol:
+    """Create an ``RWMol`` with a conformer from atomic numbers and coordinates."""
+    n = len(atomic_numbers)
+    xyz_pos = np.array(coordinates)
+    rwmol = Chem.RWMol()
+    conf = Chem.Conformer(n)
+    for i, z in enumerate(atomic_numbers):
+        rwmol.AddAtom(Chem.Atom(z))
+        conf.SetAtomPosition(i, Point3D(*xyz_pos[i].tolist()))
+    rwmol.AddConformer(conf, assignId=True)
+    return rwmol
+
+
+def _from_coords_rdkit(
+    atomic_numbers: list[int],
+    coordinates: list[list[float]],
+    charge: int = 0,
+) -> Chem.rdchem.Mol:
+    """Build an RDKit mol from 3D coordinates using ``rdDetermineBonds``.
+
+    First attempts ``DetermineBonds`` (Hückel theory, includes bond orders).
+    Heavy-atom-only inputs (e.g. from PDB files, no explicit H) often cause
+    ``DetermineBonds`` to raise a charge-balance error, so on failure the
+    method retries with ``DetermineConnectivity``, which assigns correct
+    topology (single bonds only) without requiring the valence balance
+    constraint to hold.  Either result is far better than the obabel fallback
+    that returns atoms with no bonds at all.
+
+    Args:
+        atomic_numbers: atomic numbers for each atom.
+        coordinates: Cartesian coordinates for each atom, in Å.
+        charge: total molecular charge.
+
+    Returns:
+        RDKit molecule; bond orders present when ``DetermineBonds`` succeeded,
+        otherwise single-bond connectivity from ``DetermineConnectivity``.
+
+    Raises:
+        Exception: if both methods fail.
+    """
+    rwmol = _build_rwmol(atomic_numbers, coordinates)
+    try:
+        rdDetermineBonds.DetermineBonds(rwmol, charge=charge)
+        logger.debug("rdDetermineBonds.DetermineBonds succeeded")
+        return rwmol.GetMol()
+    except Exception as exc:
+        logger.debug(
+            f"DetermineBonds failed ({exc}); retrying with DetermineConnectivity"
+        )
+
+    # DetermineBonds raises when it cannot satisfy the charge constraint
+    # (common for heavy-atom-only inputs).  DetermineConnectivity does not
+    # apply that constraint, so it reliably gives the correct connectivity.
+    rwmol2 = _build_rwmol(atomic_numbers, coordinates)
+    rdDetermineBonds.DetermineConnectivity(rwmol2)
+    # DetermineConnectivity sets noImplicit=True on every atom so that the
+    # conformer is taken as-is; clear the flag before sanitizing so that
+    # implicit H counts are computed correctly from valence.
+    for atom in rwmol2.GetAtoms():
+        atom.SetNoImplicit(False)
+    Chem.SanitizeMol(rwmol2)
+    logger.debug("rdDetermineBonds.DetermineConnectivity succeeded")
+    return rwmol2.GetMol()
+
+
 def _from_smiles_and_coords(
     smiles: str,
     atomic_numbers: list[int],
@@ -351,6 +419,19 @@ def to_rdkit(
                 f"xyz2mol failed for {len(atomic_numbers)}-atom molecule (charge={charge}); "
                 "provide a SMILES string or fix the geometry"
             )
+
+    # rdDetermineBonds fallback — handles heavy-atom-only inputs (e.g. from PDB files)
+    # where xyz2mol fails because it relies on explicit H atoms for bond-order assignment.
+    if rdkm is None:
+        try:
+            candidate = _from_coords_rdkit(atomic_numbers, coords, charge=charge)
+            if _topology_ok(candidate):
+                rdkm = candidate
+                logger.debug("rdDetermineBonds succeeded")
+            else:
+                logger.debug("rdDetermineBonds produced wrong topology, trying obabel")
+        except Exception as exc:
+            logger.debug(f"rdDetermineBonds failed, trying obabel: {exc}")
 
     if rdkm is None:
         # Geometry-only fallback via obabel — no bond orders, last resort.
