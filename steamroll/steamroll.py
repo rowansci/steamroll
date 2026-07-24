@@ -115,14 +115,23 @@ def _from_smiles_and_coords(
         ValueError: if SMILES is invalid, atom counts don't match, elements differ,
             or no valid atom mapping can be found.
     """
-    template = Chem.MolFromSmiles(smiles)
-    if template is None:
+    base = Chem.MolFromSmiles(smiles)
+    if base is None:
         raise ValueError(f"Invalid SMILES: {smiles}")
-    template = Chem.AddHs(template)
+    template_with_h = Chem.AddHs(base)
+
+    n_input = len(atomic_numbers)
+    if n_input == template_with_h.GetNumAtoms():
+        template = template_with_h
+    elif n_input == base.GetNumAtoms():
+        template = base
+    else:
+        raise ValueError(
+            f"Atom count mismatch: SMILES has {template_with_h.GetNumAtoms()} atoms "
+            f"({base.GetNumAtoms()} heavy), XYZ has {n_input}"
+        )
 
     n = template.GetNumAtoms()
-    if n != len(atomic_numbers):
-        raise ValueError(f"Atom count mismatch: SMILES has {n}, XYZ has {len(atomic_numbers)}")
 
     xyz_pos = np.array(coordinates)
 
