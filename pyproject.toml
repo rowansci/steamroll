@@ -11,7 +11,7 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "rdkit",
+    "rdkit>=2025.9.5",
     "numpy",
     "networkx",
 ]
@@ -23,7 +23,6 @@ dev = [
     "pytest-cov>=7.0",
     "ruff>=0.14",
     "ty>=0.0.16",
-    "rdkit-stubs>=0.8",
 ]
 
 [tool.ruff]

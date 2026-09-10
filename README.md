@@ -30,3 +30,41 @@ except SteamrollConversionError as e:
 
 ## Credits
 This package was created with [Cookiecutter](https://github.com/audreyr/cookiecutter) and the [jevandezande/uv-cookiecutter](https://github.com/jevandezande/uv-cookiecutter) project template.
+
+## Bond inference and compatibility
+
+`to_rdkit` first tries a supplied SMILES template. Otherwise, ordinary XYZ conversion
+uses RDKit `DetermineBonds`, trying geometric connectivity and then Hückel connectivity.
+Supply the total molecular charge and include hydrogens when inferring from XYZ alone.
+The specialized transition-metal converter is unchanged.
+
+Each RDKit attempt is limited to 10,000 bond-order iterations. If RDKit cannot infer
+bonds, the legacy organic converter runs in a subprocess with a shared five-second
+deadline covering startup and both connectivity attempts. Legacy sulfur valences try
+2 first; exhaustive charge-penalty retries are no longer used. Budget exhaustion raises
+`SteamrollConversionError` immediately, without restarting another backend. These bounds
+are not an overall wall-clock deadline for RDKit or the specialized metal converter.
+RDKit 2025.9.5 or newer is required for the iteration-limit API.
+
+**The default for `fail_without_bond_order` is now `True`.** Callers that intentionally
+want the existing connectivity-only fallback can retain that behavior explicitly:
+
+```python
+mol = to_rdkit(atomic_numbers, coordinates, charge=charge, fail_without_bond_order=False)
+```
+
+This fallback may lack reliable bond orders and formal charges. It is used after
+ordinary inference failure, but not after budget exhaustion.
+
+For SMILES-guided conversion, atoms retain template isotope and mapping labels while
+coordinates remain in XYZ order. Stereochemistry is assigned from the coordinates;
+unspecified reference stereo is accepted, while conflicting specified stereo raises
+`SteamrollTopologyMismatchError`. Hydrogen removal preserves stereochemical parity
+and retains isotopic hydrogens. XYZ alone cannot recover isotope labels or guarantee
+spin multiplicity.
+
+Sulfoxide `S=O` and `S⁺–O⁻` representations are accepted as equivalent. Carbon-substituted
+sulfoxides are returned as `S=O` to preserve existing MMFF typing. Aromatic sulfur
+cations use RDKit's first resonance form (up to 32 forms), preserving the existing
+thiazolium convention. These are representation policies, not claims that other
+resonance representations are chemically incorrect.

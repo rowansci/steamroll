@@ -1,7 +1,10 @@
 """steamroll package."""
 
+import json
 import logging
 import os
+import subprocess
+import sys
 import tempfile
 from collections import Counter
 from typing import Iterable
@@ -13,15 +16,14 @@ from rdkit.Chem import rdDetermineBonds
 from rdkit.Geometry import Point3D
 
 from .utils import strip_to_connectivity
-from .xyz2mol.xyz2mol import xyz2mol
 from .xyz2mol_tmc.xyz2mol_local import xyz2AC_obabel as xyz2ac_obabel
 from .xyz2mol_tmc.xyz2mol_tmc import TRANSITION_METALS_NUM, get_tmc_mol
 
 logger = logging.getLogger(__name__)
 
-# Lanthanides and actinides are now included in TRANSITION_METALS_NUM, so
-# has_tm will be True for them and they route through get_tmc_mol directly.
-_SKIP_XYZ2MOL: frozenset[int] = frozenset()
+# Limit each of the two organic inference attempts; exhaustion never triggers a retry.
+_BOND_ORDER_MAX_ITERATIONS = 10_000
+_LEGACY_TIMEOUT_SECONDS = 5.0
 
 
 class SteamrollConversionError(Exception):
@@ -41,22 +43,9 @@ def remove_hydrogens(molecule: Chem.rdchem.Mol) -> Chem.rdchem.Mol:
     Returns:
         RDKit molecule without hydrogens
     """
-    rwmol = Chem.RWMol(molecule)
-
-    # Iterate backwards to avoid messing indexing up. this is annoying
-    for idx in range(rwmol.GetNumAtoms() - 1, -1, -1):
-        atom = rwmol.GetAtomWithIdx(idx)
-
-        # Delete hydrogen add an explicit H to its first neighbor
-        if atom.GetAtomicNum() == 1:
-            if neighbors := atom.GetNeighbors():
-                neighbor = neighbors[0]
-                rwmol.RemoveAtom(idx)
-                neighbor.SetNumExplicitHs(neighbor.GetNumExplicitHs() + 1)
-            else:
-                logger.warning("Hydrogen atom has no neighbors, skipping")
-
-    return rwmol.GetMol()
+    # RDKit adjusts stereo parity when deleting explicit hydrogen neighbors and
+    # retains isotopic hydrogens. Manual atom deletion loses those guarantees.
+    return Chem.RemoveHs(molecule, sanitize=False)
 
 
 def fragment(molecule: Chem.rdchem.Mol) -> list[Chem.rdchem.Mol]:
@@ -158,64 +147,121 @@ def _from_smiles_and_coords(
     for t_idx, r_idx in enumerate(match):
         inv_match[r_idx] = t_idx
 
-    result = Chem.RWMol()
+    result = Chem.RenumberAtoms(template, inv_match)
+    result.RemoveAllConformers()
     result_conf = Chem.Conformer(n)
-    for raw_idx, t_idx in enumerate(inv_match):
-        new_atom = Chem.Atom(atomic_numbers[raw_idx])
-        new_atom.SetFormalCharge(template.GetAtomWithIdx(t_idx).GetFormalCharge())
-        result.AddAtom(new_atom)
+    for raw_idx in range(n):
         result_conf.SetAtomPosition(raw_idx, Point3D(*xyz_pos[raw_idx].tolist()))
     result.AddConformer(result_conf, assignId=True)
+    # Derive stereo from the supplied geometry, then validate any specified stereo
+    # against the template. Copying template tags would conceal conflicting poses.
+    Chem.RemoveStereochemistry(result)
+    Chem.AssignStereochemistryFrom3D(result)
+    return result
 
-    for bond in template.GetBonds():
-        result.AddBond(
-            match[bond.GetBeginAtomIdx()],
-            match[bond.GetEndAtomIdx()],
-            bond.GetBondType(),
-        )
 
+def _normalize_sulfur(mol: Chem.rdchem.Mol) -> Chem.rdchem.Mol:
+    """Copy molecule using consistent sulfoxide and aromatic sulfur representations.
+
+    Preserve Steamroll's existing sulfoxide representation and MMFF typing without
+    enumerating charge assignments. Both resonance representations are accepted.
+    """
+    result = Chem.RWMol(mol)
+    for sulfur in result.GetAtoms():
+        if (sulfur.GetAtomicNum(), sulfur.GetFormalCharge(), sulfur.GetDegree()) != (16, 1, 3):
+            continue
+        neighbors = list(sulfur.GetNeighbors())
+        if sorted(atom.GetAtomicNum() for atom in neighbors) != [6, 6, 8]:
+            continue
+        oxygen = next(atom for atom in neighbors if atom.GetAtomicNum() == 8)
+        bond = result.GetBondBetweenAtoms(sulfur.GetIdx(), oxygen.GetIdx())
+        if (
+            oxygen.GetFormalCharge() == -1
+            and oxygen.GetDegree() == 1
+            and bond.GetBondType() == Chem.BondType.SINGLE
+        ):
+            sulfur.SetFormalCharge(0)
+            oxygen.SetFormalCharge(0)
+            bond.SetBondType(Chem.BondType.DOUBLE)
+    Chem.SanitizeMol(result)
+    # RDKit can place thiazolium charge on sulfur. Its first resonance form moves
+    # that charge onto nitrogen, retaining the historical force-field convention.
+    if any(
+        atom.GetAtomicNum() == 16 and atom.GetIsAromatic() and atom.GetFormalCharge() > 0
+        for atom in result.GetAtoms()
+    ):
+        forms = Chem.ResonanceMolSupplier(result, maxStructs=32)
+        if len(forms) and forms[0] is not None:
+            normalized = forms[0]
+            Chem.SanitizeMol(normalized)
+            return normalized
     return result.GetMol()
 
 
 def _smiles_matches(mol: Chem.rdchem.Mol, smiles: str) -> bool:
-    """Check whether an RDKit molecule matches a non-isomeric SMILES string.
+    """Check connectivity, isotopes and specified stereo against reference SMILES.
 
-    Args:
-        mol: RDKit molecule to validate.
-        smiles: reference SMILES string.
-
-    Returns:
-        True if canonical SMILES match after stripping hydrogens.
+    Unspecified reference stereo accepts coordinate-derived stereochemistry.
+    Sulfoxide resonance representations compare equivalently; atom maps are labels.
     """
-    try:
-        ref = Chem.MolFromSmiles(smiles)
-        if ref is None:
-            return False
-        Chem.SanitizeMol(mol)
-        # isomericSmiles=False ignores stereo and isotope differences.
-        got = Chem.MolToSmiles(Chem.RemoveHs(mol), isomericSmiles=False)
-        return got == Chem.MolToSmiles(ref, isomericSmiles=False)
-    except Exception:
+    ref = Chem.MolFromSmiles(smiles)
+    if ref is None:
         return False
+    ref = Chem.RemoveHs(_normalize_sulfur(ref))
+    got = Chem.RemoveHs(_normalize_sulfur(mol))
+    for graph in (ref, got):
+        for atom in graph.GetAtoms():
+            atom.SetAtomMapNum(0)
+    return Chem.MolToSmiles(got, isomericSmiles=False) == Chem.MolToSmiles(
+        ref, isomericSmiles=False
+    ) and got.HasSubstructMatch(ref, useChirality=True)
 
 
-def _formal_charge_penalty(mol: Chem.rdchem.Mol) -> int:
-    """Score formal charges for choosing between xyz2mol resonance assignments."""
-    penalty = 0
-    for atom in mol.GetAtoms():
-        formal_charge = atom.GetFormalCharge()
-        if formal_charge == 0:
-            continue
-        penalty += abs(formal_charge)
-        is_preferred_charge = (atom.GetAtomicNum(), formal_charge) in {(7, 1), (8, -1)}
-        if not is_preferred_charge:
-            penalty += 8 * abs(formal_charge)
-    return penalty
+def _from_xyz(
+    atomic_numbers: list[int], coordinates: list[list[float]], charge: int, use_huckel: bool
+) -> Chem.rdchem.Mol:
+    """Infer organic bond orders with a finite RDKit iteration budget."""
+    mol = Chem.RWMol()
+    conf = Chem.Conformer(len(atomic_numbers))
+    for i, (number, position) in enumerate(zip(atomic_numbers, coordinates, strict=True)):
+        mol.AddAtom(Chem.Atom(number))
+        conf.SetAtomPosition(i, Point3D(*position))
+    mol.AddConformer(conf)
+    rdDetermineBonds.DetermineBonds(
+        mol,
+        charge=charge,
+        useHueckel=use_huckel,
+        maxIterations=_BOND_ORDER_MAX_ITERATIONS,
+    )
+    if Chem.GetFormalCharge(mol) != charge:
+        raise ValueError("Inferred molecular charge does not match requested charge")
+    return _normalize_sulfur(mol)
 
 
-def _has_unusual_formal_charge(mol: Chem.rdchem.Mol) -> bool:
-    """Return True when a fast xyz2mol result is worth re-scoring."""
-    return _formal_charge_penalty(mol) >= 8
+def _from_legacy(
+    atomic_numbers: list[int], coordinates: list[list[float]], charge: int
+) -> Chem.rdchem.Mol | None:
+    """Run legacy inference with a shared wall-clock deadline for both attempts."""
+    try:
+        process = subprocess.run(
+            [sys.executable, "-m", "steamroll._legacy"],
+            input=json.dumps([atomic_numbers, coordinates, charge]),
+            capture_output=True,
+            text=True,
+            timeout=_LEGACY_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise SteamrollConversionError("Legacy bond-order conversion budget exhausted") from e
+    if process.returncode != 0 or not process.stdout.strip():
+        logger.debug("Legacy conversion failed: %s", process.stderr)
+        return None
+    mol = Chem.MolFromMolBlock(json.loads(process.stdout), removeHs=False)
+    if mol is None or Chem.GetFormalCharge(mol) != charge:
+        return None
+    for i, position in enumerate(coordinates):
+        mol.GetConformer().SetAtomPosition(i, Point3D(*position))
+    return _normalize_sulfur(mol)
 
 
 def to_rdkit(
@@ -223,7 +269,7 @@ def to_rdkit(
     coordinates: ArrayLike,
     charge: int = 0,
     remove_Hs: bool = True,
-    fail_without_bond_order: bool = False,
+    fail_without_bond_order: bool = True,
     smiles: str | None = None,
 ) -> Chem.rdchem.Mol:
     """Convert a given molecular geometry to an RDKit molecule.
@@ -238,21 +284,30 @@ def to_rdkit(
         coordinates: coordinates, in Å
         charge: charge
         remove_Hs: whether or not to strip hydrogens from the output molecule
-        fail_without_bond_order: if bond order cannot be detected, raise SteamrollConversionError
-        smiles: optional SMILES string; used as the primary conversion method
-            and as a topology validator for all fallback methods
-
-    Raises:
-        ValueError: if input dimensions aren't correct
-        SteamrollConversionError: if conversion fails
-        SteamrollTopologyMismatchError: if smiles is provided but no method produces a
-            matching topology
+        fail_without_bond_order: raise on failed bond-order inference by default;
+            explicit False permits the existing connectivity-only fallback
+        smiles: optional topology template; specified stereochemistry is checked
+            against coordinates and unspecified stereo is inferred from coordinates
 
     Returns:
-        RDKit molecule
+        RDKit molecule in input atom order, with requested hydrogen removal
+
+    Raises:
+        ValueError: input dimensions, elements or coordinates are invalid
+        SteamrollConversionError: conversion fails or its inference budget is exhausted
+        SteamrollTopologyMismatchError: no candidate matches supplied topology and stereo
+
+    Note:
+        Organic XYZ input should include hydrogens. RDKit inference tries geometric
+        connectivity, then Hückel connectivity, with 10,000 bond-order iterations per
+        attempt. Budget exhaustion is terminal. Legacy inference has a shared five-second
+        subprocess deadline and does not retry with charge penalties. These limits do
+        not impose a wall-clock deadline on RDKit or specialized metal conversion.
+        Carbon-substituted sulfoxides use S=O to preserve existing MMFF typing.
+        XYZ alone does not specify isotopes or guarantee a particular spin state.
     """
     atomic_numbers = list(atomic_numbers)
-    coordinates = np.asarray(coordinates)
+    coordinates = np.asarray(coordinates, dtype=float)
 
     if coordinates.ndim != 2:
         raise ValueError("`coordinates` needs to be a two-dimensional")
@@ -263,19 +318,28 @@ def to_rdkit(
             f"Length of atomic numbers ({n_atoms}) doesn't match coordinates ({n_coords})"
         )
 
+    if not atomic_numbers or not np.isfinite(coordinates).all():
+        raise ValueError("Coordinates must be nonempty and finite")
+    if any(
+        not isinstance(number, (int, np.integer)) or not 1 <= number <= 118
+        for number in atomic_numbers
+    ):
+        raise ValueError("Atomic numbers must be integers between 1 and 118")
+
+    atomic_numbers = [int(number) for number in atomic_numbers]
     coords = coordinates.tolist()
     has_tm = any(n in TRANSITION_METALS_NUM for n in atomic_numbers)
-    has_exotic = any(n in _SKIP_XYZ2MOL for n in atomic_numbers)
 
     # SMILES-based method: topology from SMILES, positions from XYZ
     if smiles is not None:
         try:
             rdkm = _from_smiles_and_coords(smiles, atomic_numbers, coords)
-            if _smiles_matches(rdkm, smiles):
+            if Chem.GetFormalCharge(rdkm) == charge and _smiles_matches(rdkm, smiles):
+                rdkm = _normalize_sulfur(rdkm)
                 return remove_hydrogens(rdkm) if remove_Hs else rdkm
             logger.debug("SMILES-based conversion produced wrong topology, falling back")
-        except Exception as e:
-            logger.debug(f"SMILES-based conversion failed, falling back: {e}")
+        except (ValueError, RuntimeError) as e:
+            logger.debug("SMILES-based conversion failed, falling back: %s", e)
 
     rdkm: Chem.rdchem.Mol | None = None
 
@@ -295,62 +359,31 @@ def to_rdkit(
     def _topology_ok(mol: Chem.rdchem.Mol) -> bool:
         return smiles is None or _smiles_matches(mol, smiles)
 
-    if not has_exotic:
-        # xyz2mol (standard)
+    for use_huckel in (False, True):
         try:
-            candidate = xyz2mol(atomic_numbers, coords, charge=charge)[0]
-            if smiles is None and _has_unusual_formal_charge(candidate):
-                try:
-                    penalized_candidate = xyz2mol(
-                        atomic_numbers,
-                        coords,
-                        charge=charge,
-                        penalize_charge=True,
-                    )[0]
-                    if _formal_charge_penalty(penalized_candidate) < _formal_charge_penalty(
-                        candidate
-                    ):
-                        candidate = penalized_candidate
-                except Exception:
-                    logger.debug("charge-penalized xyz2mol failed, keeping fast result")
+            candidate = _from_xyz(atomic_numbers, coords, charge, use_huckel)
             if _topology_ok(candidate):
                 rdkm = candidate
-            else:
-                logger.debug("xyz2mol produced wrong topology, trying Hückel")
-        except Exception:
-            logger.debug("xyz2mol failed, trying Hückel")
+                break
+        except (ValueError, RuntimeError, IndexError) as e:
+            # RDKit translates its C++ iteration exception into RuntimeError.
+            if isinstance(e, RuntimeError) and "Max Iterations Exceeded" in str(e):
+                raise SteamrollConversionError(
+                    "RDKit bond-order iteration budget exhausted; provide SMILES or fix geometry"
+                ) from e
+            logger.debug("RDKit conversion failed (Hückel=%s): %s", use_huckel, e)
 
-        # xyz2mol (Hückel) — if standard failed or gave wrong topology
-        if rdkm is None:
-            try:
-                candidate = xyz2mol(atomic_numbers, coords, charge=charge, use_huckel=True)[0]
-                if smiles is None and _has_unusual_formal_charge(candidate):
-                    try:
-                        penalized_candidate = xyz2mol(
-                            atomic_numbers,
-                            coords,
-                            charge=charge,
-                            use_huckel=True,
-                            penalize_charge=True,
-                        )[0]
-                        if _formal_charge_penalty(penalized_candidate) < _formal_charge_penalty(
-                            candidate
-                        ):
-                            candidate = penalized_candidate
-                    except Exception:
-                        logger.debug("charge-penalized xyz2mol Hückel failed, keeping fast result")
-                if _topology_ok(candidate):
-                    rdkm = candidate
-                else:
-                    logger.debug("xyz2mol Hückel produced wrong topology, trying obabel")
-            except Exception:
-                logger.debug("xyz2mol Hückel failed, trying obabel")
+    if rdkm is None:
+        candidate = _from_legacy(atomic_numbers, coords, charge)
+        if candidate is not None and _topology_ok(candidate):
+            rdkm = candidate
 
-        if rdkm is None and fail_without_bond_order:
-            raise SteamrollConversionError(
-                f"xyz2mol failed for {len(atomic_numbers)}-atom molecule (charge={charge}); "
-                "provide a SMILES string or fix the geometry"
-            )
+    if rdkm is None and fail_without_bond_order:
+        error = SteamrollTopologyMismatchError if smiles is not None else SteamrollConversionError
+        raise error(
+            f"Bond-order inference failed for {len(atomic_numbers)}-atom molecule "
+            f"(charge={charge}); provide matching SMILES or fix the geometry"
+        )
 
     if rdkm is None:
         # Geometry-only fallback via obabel — no bond orders, last resort.
