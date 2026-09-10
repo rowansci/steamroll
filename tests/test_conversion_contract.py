@@ -13,6 +13,7 @@ from tests.test_steamroll import DATA_DIR, geometry_from_smiles, read_xyz
 
 _MACROCYCLE_SMILES = "C1CCCCSCCCCCCCCSCCCC1"
 
+
 def _isomeric(mol: Chem.Mol) -> str:
     return Chem.MolToSmiles(Chem.RemoveHs(mol))
 
@@ -178,3 +179,37 @@ def test_hypervalent_iodine_legacy_preserves_charge_and_coords() -> None:
     mol = to_rdkit(numbers, coords, charge=charge, remove_Hs=False)
     assert Chem.GetFormalCharge(mol) == charge
     np.testing.assert_allclose(mol.GetConformer().GetPositions(), coords, atol=1e-12)
+
+
+@pytest.mark.parametrize("smiles", ["Oc1ccccn1", "NCC(=O)O", "NC=O"])
+def test_guided_hydrogens_can_be_restored(smiles: str) -> None:
+    """Removing explicit hydrogens retains counts needed to restore the molecular formula."""
+    numbers, coords = geometry_from_smiles(smiles)
+    template = Chem.MolToSmiles(Chem.AddHs(Chem.MolFromSmiles(smiles)))
+    mol = to_rdkit(numbers, coords, smiles=template, remove_Hs=True)
+    restored = Chem.AddHs(mol)
+    assert sorted(atom.GetAtomicNum() for atom in restored.GetAtoms()) == sorted(numbers)
+    assert _isomeric(restored) == _isomeric(Chem.MolFromSmiles(smiles))
+
+
+@pytest.mark.parametrize(
+    "smiles",
+    [
+        "Cn1cnc2[nH]ncc2c1=N",
+        "Cn1cnc2[nH]cnc2c1=N",
+        "N=C(N)O",
+        "Cn1ccc(=N)[nH]c1=O",
+        "N=C(N)S",
+        "CC(=N)NC(C)=O",
+        "CC(=O)NC(=N)N",
+        "N=C1CCC(=O)N1",
+        "N=C1Cc2ccccc2N1",
+    ],
+)
+def test_guided_imine_with_unspecified_stereo(smiles: str) -> None:
+    """Coordinate-derived imine stereo does not change reference hydrogen topology."""
+    numbers, coords = geometry_from_smiles(smiles)
+    template = Chem.MolToSmiles(Chem.AddHs(Chem.MolFromSmiles(smiles)))
+    mol = to_rdkit(numbers, coords, smiles=template, remove_Hs=True)
+    assert sorted(atom.GetAtomicNum() for atom in Chem.AddHs(mol).GetAtoms()) == sorted(numbers)
+    assert converter._smiles_matches(mol, template)

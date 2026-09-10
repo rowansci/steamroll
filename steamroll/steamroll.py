@@ -45,7 +45,8 @@ def remove_hydrogens(molecule: Chem.rdchem.Mol) -> Chem.rdchem.Mol:
     """
     # RDKit adjusts stereo parity when deleting explicit hydrogen neighbors and
     # retains isotopic hydrogens. Manual atom deletion loses those guarantees.
-    return Chem.RemoveHs(molecule, sanitize=False)
+    # Sanitization recalculates implicit H counts after explicit H removal.
+    return Chem.RemoveHs(molecule)
 
 
 def fragment(molecule: Chem.rdchem.Mol) -> list[Chem.rdchem.Mol]:
@@ -207,8 +208,10 @@ def _smiles_matches(mol: Chem.rdchem.Mol, smiles: str) -> bool:
     ref = Chem.MolFromSmiles(smiles)
     if ref is None:
         return False
-    ref = Chem.RemoveHs(_normalize_sulfur(ref))
-    got = Chem.RemoveHs(_normalize_sulfur(mol))
+    # RemoveHs can retain H atoms defining imine stereo only on the 3D-derived
+    # graph. Compare both graphs with explicit Hs to avoid a false mismatch.
+    ref = Chem.AddHs(_normalize_sulfur(ref))
+    got = Chem.AddHs(_normalize_sulfur(mol))
     for graph in (ref, got):
         for atom in graph.GetAtoms():
             atom.SetAtomMapNum(0)
