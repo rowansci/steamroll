@@ -362,3 +362,78 @@ def test_tmc_conformer_preserved() -> None:
     conf = rdkm.GetConformer()
     positions = [conf.GetAtomPosition(i) for i in range(rdkm.GetNumAtoms())]
     assert not all(p.x == 0.0 and p.y == 0.0 and p.z == 0.0 for p in positions)
+
+_BZU_PDB_BLOCK = """\
+HETATM    2  C9  BZU A 555      -3.394   5.205  13.019  1.00  0.00           C
+HETATM    3  C10 BZU A 555      -3.055   3.867  13.710  1.00  0.00           C
+HETATM    4  C11 BZU A 555      -3.349   7.408  13.935  1.00  0.00           C
+HETATM    5  C12 BZU A 555      -2.076   7.426  14.764  1.00  0.00           C
+HETATM    6  C14 BZU A 555      -1.915   9.769  15.059  1.00  0.00           C
+HETATM    7  C15 BZU A 555      -0.878  10.903  15.178  1.00  0.00           C
+HETATM    8  O1A BZU A 555      -5.425   0.994  18.287  1.00  0.00           O
+HETATM    9  O2A BZU A 555      -7.398   0.817  16.995  1.00  0.00           O
+HETATM   10  N21 BZU A 555      -5.486  -0.545  16.461  1.00  0.00           N
+HETATM   11  S1  BZU A 555      -5.966   0.750  16.997  1.00  0.00           S
+HETATM   12  C4  BZU A 555      -4.321   2.152  15.292  1.00  0.00           C
+HETATM   13  C5  BZU A 555      -4.165   3.345  14.642  1.00  0.00           C
+HETATM   14  C6  BZU A 555      -5.216   4.200  14.931  1.00  0.00           C
+HETATM   15  S2  BZU A 555      -6.379   3.501  15.979  1.00  0.00           S
+HETATM   16  S7  BZU A 555      -5.295   5.827  14.368  1.00  0.00           S
+HETATM   17  O3B BZU A 555      -6.160   5.873  13.244  1.00  0.00           O
+HETATM   18  O4B BZU A 555      -5.858   6.680  15.373  1.00  0.00           O
+HETATM   19  N8  BZU A 555      -3.848   6.065  14.090  1.00  0.00           N
+HETATM   20  N16 BZU A 555      -2.776   2.895  12.649  1.00  0.00           N
+HETATM   21  O13 BZU A 555      -1.307   8.596  14.533  1.00  0.00           O
+HETATM   22  C17 BZU A 555      -1.564   3.011  11.841  1.00  0.00           C
+HETATM   23  C18 BZU A 555      -1.463   1.927  10.754  1.00  0.00           C
+"""
+
+
+def test_pdb_heavy_atom_only_gets_bonds() -> None:
+    """Regression test: heavy-atom-only input (e.g. from a PDB file) must yield
+    a connected molecule with proper bond orders, not isolated atoms.
+
+    Before the fix, xyz2mol would silently fail on inputs with no explicit
+    hydrogens and the obabel fallback would return atoms with no bonds, giving
+    a SMILES like ``C.C.C.C...``.  After the fix, rdDetermineBonds.DetermineBonds
+    handles the heavy-atom-only case and assigns connectivity + bond orders.
+    """
+    pdb_mol = Chem.MolFromPDBBlock(_BZU_PDB_BLOCK, removeHs=False)
+    assert pdb_mol is not None, "RDKit could not parse the PDB block"
+
+    crds = pdb_mol.GetConformer(0).GetPositions().tolist()
+    atomic_nums = [atom.GetAtomicNum() for atom in pdb_mol.GetAtoms()]
+
+    # Confirm the input really is heavy-atom-only (no hydrogens)
+    assert 1 not in atomic_nums, "Expected no explicit H atoms in this PDB input"
+
+    rd_mol = to_rdkit(atomic_nums, crds, charge=0)
+
+    # All 22 heavy atoms must be present
+    assert rd_mol.GetNumAtoms() == 22
+
+    # Every atom must have at least one bond — the core regression check
+    isolated = [
+        atom.GetIdx()
+        for atom in rd_mol.GetAtoms()
+        if atom.GetDegree() == 0
+    ]
+    assert isolated == [], f"Atoms with no bonds (isolated): {isolated}"
+
+    # The SMILES must not be the all-disconnected pattern produced by the bug
+    smiles = Chem.MolToSmiles(rd_mol)
+    assert "." not in smiles or smiles.count(".") < rd_mol.GetNumAtoms() - 1, (
+        f"Molecule looks disconnected: {smiles}"
+    )
+
+    # Canonical heavy-atom SMILES must match the topology reported by RDKit's own
+    # PDB parser.  We compare non-isomeric SMILES after stripping any remaining
+    # explicit Hs so that bookkeeping differences (e.g. "[SH]" vs "S" with an
+    # implicit H) do not cause spurious mismatches.
+    ref_smiles = Chem.MolToSmiles(
+        Chem.RemoveHs(Chem.RWMol(pdb_mol).GetMol()), isomericSmiles=False
+    )
+    got_smiles = Chem.MolToSmiles(rd_mol, isomericSmiles=False)
+    assert got_smiles == ref_smiles, (
+        f"SMILES mismatch:\n  expected (PDB parser): {ref_smiles}\n  got (steamroll):       {got_smiles}"
+    )
