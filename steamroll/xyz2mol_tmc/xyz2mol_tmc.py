@@ -556,6 +556,8 @@ def get_lig_mol(mol, charge, coordinating_atoms):
 def get_tmc_mol(xyz_file, overall_charge, with_stereo=False):
     """Get TMC mol object from given xyz file.
 
+    Retains input atom order and supplied coordinates, including explicit Hs.
+
     Args:
         xyz_file (str) : Path to TMC xyz file
         overall_charge (int): Overall charge of TMC
@@ -679,6 +681,25 @@ def get_tmc_mol(xyz_file, overall_charge, with_stereo=False):
             for i, emol_idx in enumerate(match):
                 conf.SetAtomPosition(i, emol_conf.GetAtomPosition(emol_idx))
             tmc_mol.AddConformer(conf, assignId=True)
+
+        # Restore explicit Hs before matching all supplied atoms. Newly inferred Hs
+        # retain generated coordinates; supplied Hs get their original positions.
+        tmc_mol = Chem.AddHs(tmc_mol, addCoords=True)
+        match = strip_to_connectivity(tmc_mol).GetSubstructMatch(strip_to_connectivity(emol_mol))
+        if len(match) != emol_mol.GetNumAtoms():
+            raise ValueError("Could not restore input atom order after TMC SMILES conversion")
+        input_order = sorted(
+            range(emol_mol.GetNumAtoms()),
+            key=lambda i: emol_mol.GetAtomWithIdx(i).GetIntProp("__origIdx"),
+        )
+        order = [match[i] for i in input_order]
+        supplied = set(order)
+        order.extend(i for i in range(tmc_mol.GetNumAtoms()) if i not in supplied)
+        tmc_mol = Chem.RenumberAtoms(tmc_mol, order)
+        conf = tmc_mol.GetConformer()
+        emol_conf = emol_mol.GetConformer()
+        for i, emol_idx in enumerate(input_order):
+            conf.SetAtomPosition(i, emol_conf.GetAtomPosition(emol_idx))
 
     return tmc_mol
 
