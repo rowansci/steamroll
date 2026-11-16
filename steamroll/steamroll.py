@@ -347,7 +347,7 @@ def to_rdkit(
     rdkm: Chem.rdchem.Mol | None = None
 
     if has_tm:
-        # Use the specialized TMC converter; Hs come back implicit → make explicit.
+        # Specialized TMC converter preserves supplied atoms and coordinates.
         xyz_file = _write_temp_xyz(atomic_numbers, coords)
         try:
             rdkm = get_tmc_mol(xyz_file, charge)
