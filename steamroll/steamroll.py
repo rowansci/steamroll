@@ -357,6 +357,10 @@ def to_rdkit(
             os.unlink(xyz_file)
         if rdkm is None:
             raise SteamrollConversionError("xyz2mol_tm returned no molecule")
+        if smiles is not None and not _smiles_matches(rdkm, smiles):
+            raise SteamrollTopologyMismatchError(
+                "xyz2mol_tm result does not match the provided SMILES"
+            )
         return remove_hydrogens(rdkm) if remove_Hs else Chem.AddHs(rdkm, addCoords=True)
 
     def _topology_ok(mol: Chem.rdchem.Mol) -> bool:
