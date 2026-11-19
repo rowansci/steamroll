@@ -16,7 +16,6 @@ from rdkit.Chem import rdDetermineBonds
 from rdkit.Geometry import Point3D
 
 from .utils import strip_to_connectivity
-from .xyz2mol_tmc.xyz2mol_local import xyz2AC_obabel as xyz2ac_obabel
 from .xyz2mol_tmc.xyz2mol_tmc import TRANSITION_METALS_NUM, get_tmc_mol
 
 logger = logging.getLogger(__name__)
@@ -307,6 +306,73 @@ def _from_legacy(
     return _normalize_sulfur(mol)
 
 
+def _validate_geometry(
+    atomic_numbers: Iterable[int], coordinates: ArrayLike
+) -> tuple[list[int], list[list[float]]]:
+    """Validate input geometry and convert it to native lists."""
+    atomic_numbers = list(atomic_numbers)
+    positions = np.asarray(coordinates, dtype=float)
+    if positions.ndim != 2 or positions.shape[1] != 3:
+        raise ValueError("Coordinates must have shape (number of atoms, 3)")
+    if len(atomic_numbers) != len(positions):
+        raise ValueError("Atomic numbers and coordinates have different lengths")
+    if not atomic_numbers or not np.isfinite(positions).all():
+        raise ValueError("Coordinates must be nonempty and finite")
+    if any(
+        not isinstance(number, (int, np.integer)) or not 1 <= number <= 118
+        for number in atomic_numbers
+    ):
+        raise ValueError("Atomic numbers must be integers between 1 and 118")
+    return [int(number) for number in atomic_numbers], positions.tolist()
+
+
+def to_connectivity(
+    atomic_numbers: Iterable[int], coordinates: ArrayLike, remove_Hs: bool = True
+) -> Chem.rdchem.Mol:
+    """Infer a geometry-only graph without assigning molecular chemistry.
+
+    Args:
+        atomic_numbers: atomic numbers in input order
+        coordinates: Cartesian coordinates in Å
+        remove_Hs: remove hydrogens using RDKit's hydrogen-removal rules
+
+    Returns:
+        Unsanitized RDKit molecule with single bonds and supplied coordinates.
+        Charges, aromaticity, stereo, and missing hydrogens are unassigned.
+        The boolean `steamroll_bond_orders_assigned` property is false; this graph
+        is unsuitable for force fields or calculations requiring molecular chemistry
+
+    Raises:
+        ValueError: input geometry is invalid
+        SteamrollConversionError: geometric connectivity cannot be determined
+    """
+    numbers, positions = _validate_geometry(atomic_numbers, coordinates)
+    mol = Chem.RWMol()
+    conf = Chem.Conformer(len(numbers))
+    for number, position in zip(numbers, positions, strict=True):
+        index = mol.AddAtom(Chem.Atom(number))
+        conf.SetAtomPosition(index, Point3D(*position))
+    mol.AddConformer(conf)
+    try:
+        rdDetermineBonds.DetermineConnectivity(mol)
+        for atom in mol.GetAtoms():
+            atom.SetNoImplicit(True)
+        mol.UpdatePropertyCache(strict=False)
+        result = Chem.RemoveHs(mol, sanitize=False) if remove_Hs else mol.GetMol()
+        result.UpdatePropertyCache(strict=False)
+    except (ValueError, RuntimeError) as e:
+        raise SteamrollConversionError("Geometric connectivity inference failed") from e
+    result.SetBoolProp("steamroll_bond_orders_assigned", False)
+    return result
+
+
+def _finish_conversion(mol: Chem.rdchem.Mol, remove_hs: bool) -> Chem.rdchem.Mol:
+    """Apply hydrogen policy and identify results with assigned molecular chemistry."""
+    result = remove_hydrogens(mol) if remove_hs else mol
+    result.SetBoolProp("steamroll_bond_orders_assigned", True)
+    return result
+
+
 def to_rdkit(
     atomic_numbers: Iterable[int],
     coordinates: ArrayLike,
@@ -328,13 +394,16 @@ def to_rdkit(
         charge: charge
         remove_Hs: whether or not to strip hydrogens from the output molecule
         fail_without_bond_order: raise on failed bond-order inference by default;
-            explicit False permits the existing connectivity-only fallback
+            explicit False permits an unsanitized connectivity-only fallback when
+            no SMILES is supplied; its `steamroll_bond_orders_assigned` property is false
         smiles: optional topology template; input must contain all hydrogens or none
             and include every heavy atom; specified stereo is checked against coordinates
             and unspecified stereo is inferred from coordinates
 
     Returns:
-        RDKit molecule in input atom order, with requested hydrogen removal
+        RDKit molecule in input atom order, with requested hydrogen removal.
+        The boolean `steamroll_bond_orders_assigned` property distinguishes assigned
+        chemistry from an explicitly permitted connectivity-only result
 
     Raises:
         ValueError: input dimensions, elements, coordinates or SMILES are invalid
@@ -353,28 +422,7 @@ def to_rdkit(
         Carbon-substituted sulfoxides use S=O to preserve existing MMFF typing.
         XYZ alone does not specify isotopes or guarantee a particular spin state.
     """
-    atomic_numbers = list(atomic_numbers)
-    coordinates = np.asarray(coordinates, dtype=float)
-
-    if coordinates.ndim != 2:
-        raise ValueError("`coordinates` needs to be a two-dimensional")
-    if coordinates.shape[1] != 3:
-        raise ValueError("Coordinates needs to have second dimension with length 3")
-    if (n_atoms := len(atomic_numbers)) != (n_coords := len(coordinates)):
-        raise ValueError(
-            f"Length of atomic numbers ({n_atoms}) doesn't match coordinates ({n_coords})"
-        )
-
-    if not atomic_numbers or not np.isfinite(coordinates).all():
-        raise ValueError("Coordinates must be nonempty and finite")
-    if any(
-        not isinstance(number, (int, np.integer)) or not 1 <= number <= 118
-        for number in atomic_numbers
-    ):
-        raise ValueError("Atomic numbers must be integers between 1 and 118")
-
-    atomic_numbers = [int(number) for number in atomic_numbers]
-    coords = coordinates.tolist()
+    atomic_numbers, coords = _validate_geometry(atomic_numbers, coordinates)
     has_tm = any(n in TRANSITION_METALS_NUM for n in atomic_numbers)
 
     reference = None
@@ -400,7 +448,7 @@ def to_rdkit(
             rdkm = _from_smiles_and_coords(reference, atomic_numbers, coords)
             if _candidate_ok(rdkm):
                 rdkm = _normalize_sulfur(rdkm)
-                return remove_hydrogens(rdkm) if remove_Hs else rdkm
+                return _finish_conversion(rdkm, remove_Hs)
             logger.debug("SMILES-based conversion produced wrong topology, falling back")
         except (ValueError, RuntimeError) as e:
             logger.debug("SMILES-based conversion failed, falling back: %s", e)
@@ -423,7 +471,7 @@ def to_rdkit(
         if rdkm is None:
             raise SteamrollConversionError("xyz2mol_tm returned no molecule")
         _validate_candidate(rdkm, atomic_numbers, charge, reference)
-        return remove_hydrogens(rdkm) if remove_Hs else rdkm
+        return _finish_conversion(rdkm, remove_Hs)
 
     for use_huckel in (False, True):
         try:
@@ -460,28 +508,14 @@ def to_rdkit(
         )
 
     if rdkm is None:
-        # Geometry-only fallback via obabel — no bond orders, last resort.
-        try:
-            _, rdkm = xyz2ac_obabel(atomic_numbers, coords)
-        except Exception as e:
-            raise SteamrollConversionError(
-                f"all conversion methods failed for {len(atomic_numbers)}-atom molecule "
-                f"(charge={charge}); provide a SMILES string or fix the geometry"
-            ) from e
-        if reference is not None and not _smiles_matches(rdkm, reference):
-            try:
-                got = Chem.MolToSmiles(Chem.RemoveHs(rdkm), isomericSmiles=False)
-            except Exception:
-                got = "<could not determine>"
-            expected = Chem.MolToSmiles(reference, isomericSmiles=False)
+        if reference is not None:
             raise SteamrollTopologyMismatchError(
-                f"no conversion method matched the provided SMILES for "
-                f"{len(atomic_numbers)}-atom molecule (charge={charge})\n"
-                f"  expected: {expected}\n"
-                f"  got:      {got}"
+                "No assigned molecule matches the supplied SMILES; "
+                "an unassigned connectivity graph cannot validate reference chemistry"
             )
+        return to_connectivity(atomic_numbers, coords, remove_Hs=remove_Hs)
 
-    return remove_hydrogens(rdkm) if remove_Hs else rdkm
+    return _finish_conversion(rdkm, remove_Hs)
 
 
 ATOMIC_NUMBERS = {

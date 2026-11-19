@@ -139,8 +139,8 @@ def test_strict_default_and_explicit_connectivity(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(converter, "_from_xyz", Mock(side_effect=ValueError("No bond orders")))
     monkeypatch.setattr(converter, "_from_legacy", Mock(return_value=None))
     fallback_mol = Chem.MolFromSmiles("O")
-    fallback = Mock(return_value=(None, fallback_mol))
-    monkeypatch.setattr(converter, "xyz2ac_obabel", fallback)
+    fallback = Mock(return_value=fallback_mol)
+    monkeypatch.setattr(converter, "to_connectivity", fallback)
     with pytest.raises(SteamrollConversionError, match="Bond-order inference failed"):
         to_rdkit([8], [[0, 0, 0]])
     fallback.assert_not_called()
@@ -167,7 +167,7 @@ def test_legacy_deadline_is_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(converter, "_from_xyz", Mock(side_effect=ValueError("No bond orders")))
     monkeypatch.setattr(converter, "_LEGACY_TIMEOUT_SECONDS", 0.000001)
     fallback = Mock(side_effect=AssertionError("Deadline must not trigger fallback"))
-    monkeypatch.setattr(converter, "xyz2ac_obabel", fallback)
+    monkeypatch.setattr(converter, "to_connectivity", fallback)
     with pytest.raises(SteamrollConversionError, match=r"Legacy.*budget exhausted"):
         to_rdkit([8], [[0, 0, 0]], fail_without_bond_order=False)
     fallback.assert_not_called()

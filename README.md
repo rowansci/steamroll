@@ -33,6 +33,23 @@ Partial hydrogen inputs and conflicting template charges raise
 `SteamrollTopologyMismatchError` before inference. Explicit isotopic hydrogens in
 the template require coordinates. Invalid SMILES raise `ValueError`.
 
+To request geometric connectivity without assigning bond orders or charges:
+
+```python
+from steamroll import to_connectivity
+
+graph = to_connectivity(atomic_numbers, coordinates)
+```
+
+This returns an unsanitized graph with single bonds, retains supplied positions,
+and does not infer missing hydrogens, aromaticity, or stereo. It is unsuitable for
+force fields or other calculations requiring assigned chemistry. Its boolean
+`steamroll_bond_orders_assigned` property is false; successful chemistry conversion
+sets this property to true. Explicitly passing `fail_without_bond_order=False` to
+`to_rdkit` permits the same graph as a last resort, while inference-budget exhaustion
+remains terminal. Call `to_connectivity` directly to skip bond-order inference.
+A supplied SMILES always requires matching assigned chemistry, even in permissive mode.
+
 
 ## Credits
 This package was created with [Cookiecutter](https://github.com/audreyr/cookiecutter) and the [jevandezande/uv-cookiecutter](https://github.com/jevandezande/uv-cookiecutter) project template.
