@@ -27,6 +27,12 @@ except SteamrollConversionError as e:
     raise ValueError("Conversion to RDKit failed!") from e
 ```
 
+Organic XYZ inference expects explicit hydrogens. With `smiles=...`, coordinates may
+contain all hydrogens or none, but must contain every heavy atom in the template.
+Partial hydrogen inputs and conflicting template charges raise
+`SteamrollTopologyMismatchError` before inference. Explicit isotopic hydrogens in
+the template require coordinates. Invalid SMILES raise `ValueError`.
+
 
 ## Credits
 This package was created with [Cookiecutter](https://github.com/audreyr/cookiecutter) and the [jevandezande/uv-cookiecutter](https://github.com/jevandezande/uv-cookiecutter) project template.

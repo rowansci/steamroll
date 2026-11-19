@@ -82,8 +82,28 @@ def _write_temp_xyz(atomic_numbers: list[int], coordinates: list[list[float]]) -
     return f.name
 
 
+def _template_for_input(reference: Chem.rdchem.Mol, atomic_numbers: list[int]) -> Chem.rdchem.Mol:
+    """Choose a complete or hydrogen-free template and reject incompatible elements."""
+    expected = Counter(
+        atom.GetAtomicNum() for atom in reference.GetAtoms() if atom.GetAtomicNum() != 1
+    )
+    actual: Counter[int] = Counter(number for number in atomic_numbers if number != 1)
+    if actual != expected:
+        raise SteamrollTopologyMismatchError(
+            f"Heavy atoms differ from SMILES: missing {dict(expected - actual)}, "
+            f"extra {dict(actual - expected)} (atomic numbers)"
+        )
+    template = Chem.AddHs(reference) if 1 in atomic_numbers else Chem.Mol(reference)
+    if Counter(atom.GetAtomicNum() for atom in template.GetAtoms()) != Counter(atomic_numbers):
+        raise SteamrollTopologyMismatchError(
+            "Supply coordinates for all hydrogens or none; explicit isotopic hydrogens "
+            "in the template require coordinates"
+        )
+    return template
+
+
 def _from_smiles_and_coords(
-    smiles: str,
+    smiles: str | Chem.rdchem.Mol,
     atomic_numbers: list[int],
     coordinates: list[list[float]],
 ) -> Chem.rdchem.Mol:
@@ -105,30 +125,13 @@ def _from_smiles_and_coords(
         ValueError: if SMILES is invalid, atom counts don't match, elements differ,
             or no valid atom mapping can be found.
     """
-    base = Chem.MolFromSmiles(smiles)
+    base = Chem.MolFromSmiles(smiles) if isinstance(smiles, str) else smiles
     if base is None:
         raise ValueError(f"Invalid SMILES: {smiles}")
-    template_with_h = Chem.AddHs(base)
-
-    n_input = len(atomic_numbers)
-    if n_input == template_with_h.GetNumAtoms():
-        template = template_with_h
-    elif n_input == base.GetNumAtoms():
-        template = base
-    else:
-        raise ValueError(
-            f"Atom count mismatch: SMILES has {template_with_h.GetNumAtoms()} atoms "
-            f"({base.GetNumAtoms()} heavy), XYZ has {n_input}"
-        )
-
+    template = _template_for_input(base, atomic_numbers)
     n = template.GetNumAtoms()
 
     xyz_pos = np.array(coordinates)
-
-    if Counter(template.GetAtomWithIdx(i).GetAtomicNum() for i in range(n)) != Counter(
-        atomic_numbers
-    ):
-        raise ValueError("Element mismatch between SMILES and XYZ")
 
     raw = Chem.RWMol()
     raw_conf = Chem.Conformer(n)
@@ -199,13 +202,13 @@ def _normalize_sulfur(mol: Chem.rdchem.Mol) -> Chem.rdchem.Mol:
     return result.GetMol()
 
 
-def _smiles_matches(mol: Chem.rdchem.Mol, smiles: str) -> bool:
+def _smiles_matches(mol: Chem.rdchem.Mol, smiles: str | Chem.rdchem.Mol) -> bool:
     """Check connectivity, isotopes and specified stereo against reference SMILES.
 
     Unspecified reference stereo accepts coordinate-derived stereochemistry.
     Sulfoxide resonance representations compare equivalently; atom maps are labels.
     """
-    ref = Chem.MolFromSmiles(smiles)
+    ref = Chem.MolFromSmiles(smiles) if isinstance(smiles, str) else smiles
     if ref is None:
         return False
     # RemoveHs can retain H atoms defining imine stereo only on the 3D-derived
@@ -245,7 +248,7 @@ def _validate_candidate(
     mol: Chem.rdchem.Mol,
     atomic_numbers: list[int],
     charge: int,
-    smiles: str | None,
+    smiles: str | Chem.rdchem.Mol | None,
 ) -> None:
     """Reject inferred molecules that violate the input chemistry or geometry contract."""
     expected = Counter(number for number in atomic_numbers if number != 1)
@@ -326,16 +329,18 @@ def to_rdkit(
         remove_Hs: whether or not to strip hydrogens from the output molecule
         fail_without_bond_order: raise on failed bond-order inference by default;
             explicit False permits the existing connectivity-only fallback
-        smiles: optional topology template; specified stereochemistry is checked
-            against coordinates and unspecified stereo is inferred from coordinates
+        smiles: optional topology template; input must contain all hydrogens or none
+            and include every heavy atom; specified stereo is checked against coordinates
+            and unspecified stereo is inferred from coordinates
 
     Returns:
         RDKit molecule in input atom order, with requested hydrogen removal
 
     Raises:
-        ValueError: input dimensions, elements or coordinates are invalid
+        ValueError: input dimensions, elements, coordinates or SMILES are invalid
         SteamrollConversionError: conversion fails or its inference budget is exhausted
-        SteamrollTopologyMismatchError: no candidate matches supplied topology and stereo
+        SteamrollTopologyMismatchError: template charge or atoms conflict with input,
+            hydrogen input is partial, or no candidate matches supplied topology and stereo
 
     Note:
         Organic XYZ input should include hydrogens. RDKit inference tries geometric
@@ -372,18 +377,27 @@ def to_rdkit(
     coords = coordinates.tolist()
     has_tm = any(n in TRANSITION_METALS_NUM for n in atomic_numbers)
 
+    reference = None
+    if smiles is not None:
+        reference = Chem.MolFromSmiles(smiles)
+        if reference is None:
+            raise ValueError(f"Invalid SMILES: {smiles}")
+        if Chem.GetFormalCharge(reference) != charge:
+            raise SteamrollTopologyMismatchError("SMILES charge differs from the requested charge")
+        _template_for_input(reference, atomic_numbers)
+
     def _candidate_ok(mol: Chem.rdchem.Mol) -> bool:
         try:
-            _validate_candidate(mol, atomic_numbers, charge, smiles)
+            _validate_candidate(mol, atomic_numbers, charge, reference)
         except SteamrollConversionError as e:
             logger.debug("Rejected conversion candidate: %s", e)
             return False
         return True
 
     # SMILES-based method: topology from SMILES, positions from XYZ
-    if smiles is not None:
+    if reference is not None:
         try:
-            rdkm = _from_smiles_and_coords(smiles, atomic_numbers, coords)
+            rdkm = _from_smiles_and_coords(reference, atomic_numbers, coords)
             if _candidate_ok(rdkm):
                 rdkm = _normalize_sulfur(rdkm)
                 return remove_hydrogens(rdkm) if remove_Hs else rdkm
@@ -408,7 +422,7 @@ def to_rdkit(
             os.unlink(xyz_file)
         if rdkm is None:
             raise SteamrollConversionError("xyz2mol_tm returned no molecule")
-        _validate_candidate(rdkm, atomic_numbers, charge, smiles)
+        _validate_candidate(rdkm, atomic_numbers, charge, reference)
         return remove_hydrogens(rdkm) if remove_Hs else rdkm
 
     for use_huckel in (False, True):
@@ -454,12 +468,12 @@ def to_rdkit(
                 f"all conversion methods failed for {len(atomic_numbers)}-atom molecule "
                 f"(charge={charge}); provide a SMILES string or fix the geometry"
             ) from e
-        if smiles is not None and not _smiles_matches(rdkm, smiles):
+        if reference is not None and not _smiles_matches(rdkm, reference):
             try:
                 got = Chem.MolToSmiles(Chem.RemoveHs(rdkm), isomericSmiles=False)
             except Exception:
                 got = "<could not determine>"
-            expected = Chem.MolToSmiles(Chem.MolFromSmiles(smiles), isomericSmiles=False)
+            expected = Chem.MolToSmiles(reference, isomericSmiles=False)
             raise SteamrollTopologyMismatchError(
                 f"no conversion method matched the provided SMILES for "
                 f"{len(atomic_numbers)}-atom molecule (charge={charge})\n"
