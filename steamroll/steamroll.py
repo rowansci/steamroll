@@ -241,6 +241,31 @@ def _from_xyz(
     return _normalize_sulfur(mol)
 
 
+def _validate_candidate(
+    mol: Chem.rdchem.Mol,
+    atomic_numbers: list[int],
+    charge: int,
+    smiles: str | None,
+) -> None:
+    """Reject inferred molecules that violate the input chemistry or geometry contract."""
+    expected = Counter(number for number in atomic_numbers if number != 1)
+    actual = Counter(atom.GetAtomicNum() for atom in mol.GetAtoms() if atom.GetAtomicNum() != 1)
+    if actual != expected:
+        raise SteamrollConversionError("Conversion changed the supplied heavy atoms")
+    if Chem.GetFormalCharge(mol) != charge:
+        raise SteamrollConversionError("Conversion changed the requested molecular charge")
+    supplied_hs = atomic_numbers.count(1)
+    if (
+        supplied_hs
+        and sum(atom.GetAtomicNum() == 1 for atom in Chem.AddHs(mol).GetAtoms()) < supplied_hs
+    ):
+        raise SteamrollConversionError("Conversion lost supplied hydrogens")
+    if not mol.GetNumConformers() or not np.isfinite(mol.GetConformer().GetPositions()).all():
+        raise SteamrollConversionError("Conversion returned missing or nonfinite coordinates")
+    if smiles is not None and not _smiles_matches(mol, smiles):
+        raise SteamrollTopologyMismatchError("Conversion does not match the supplied SMILES")
+
+
 def _from_legacy(
     atomic_numbers: list[int], coordinates: list[list[float]], charge: int
 ) -> Chem.rdchem.Mol | None:
@@ -333,11 +358,19 @@ def to_rdkit(
     coords = coordinates.tolist()
     has_tm = any(n in TRANSITION_METALS_NUM for n in atomic_numbers)
 
+    def _candidate_ok(mol: Chem.rdchem.Mol) -> bool:
+        try:
+            _validate_candidate(mol, atomic_numbers, charge, smiles)
+        except SteamrollConversionError as e:
+            logger.debug("Rejected conversion candidate: %s", e)
+            return False
+        return True
+
     # SMILES-based method: topology from SMILES, positions from XYZ
     if smiles is not None:
         try:
             rdkm = _from_smiles_and_coords(smiles, atomic_numbers, coords)
-            if Chem.GetFormalCharge(rdkm) == charge and _smiles_matches(rdkm, smiles):
+            if _candidate_ok(rdkm):
                 rdkm = _normalize_sulfur(rdkm)
                 return remove_hydrogens(rdkm) if remove_Hs else rdkm
             logger.debug("SMILES-based conversion produced wrong topology, falling back")
@@ -347,6 +380,10 @@ def to_rdkit(
     rdkm: Chem.rdchem.Mol | None = None
 
     if has_tm:
+        if sum(number in TRANSITION_METALS_NUM for number in atomic_numbers) != 1:
+            raise SteamrollConversionError(
+                "Inference requires exactly one metal center; supply SMILES"
+            )
         # Use the specialized TMC converter; Hs come back implicit → make explicit.
         xyz_file = _write_temp_xyz(atomic_numbers, coords)
         try:
@@ -357,15 +394,13 @@ def to_rdkit(
             os.unlink(xyz_file)
         if rdkm is None:
             raise SteamrollConversionError("xyz2mol_tm returned no molecule")
+        _validate_candidate(rdkm, atomic_numbers, charge, smiles)
         return remove_hydrogens(rdkm) if remove_Hs else Chem.AddHs(rdkm, addCoords=True)
-
-    def _topology_ok(mol: Chem.rdchem.Mol) -> bool:
-        return smiles is None or _smiles_matches(mol, smiles)
 
     for use_huckel in (False, True):
         try:
             candidate = _from_xyz(atomic_numbers, coords, charge, use_huckel)
-            if _topology_ok(candidate):
+            if _candidate_ok(candidate):
                 rdkm = candidate
                 break
         except (ValueError, RuntimeError, IndexError) as e:
@@ -378,7 +413,7 @@ def to_rdkit(
 
     if rdkm is None:
         candidate = _from_legacy(atomic_numbers, coords, charge)
-        if candidate is not None and _topology_ok(candidate):
+        if candidate is not None and _candidate_ok(candidate):
             rdkm = candidate
 
     if rdkm is None and fail_without_bond_order:
@@ -397,7 +432,7 @@ def to_rdkit(
                 f"all conversion methods failed for {len(atomic_numbers)}-atom molecule "
                 f"(charge={charge}); provide a SMILES string or fix the geometry"
             ) from e
-        if not _topology_ok(rdkm):
+        if smiles is not None and not _smiles_matches(rdkm, smiles):
             try:
                 got = Chem.MolToSmiles(Chem.RemoveHs(rdkm), isomericSmiles=False)
             except Exception:
