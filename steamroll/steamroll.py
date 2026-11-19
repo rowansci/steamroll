@@ -46,7 +46,7 @@ def remove_hydrogens(molecule: Chem.rdchem.Mol) -> Chem.rdchem.Mol:
     # RDKit adjusts stereo parity when deleting explicit hydrogen neighbors and
     # retains isotopic hydrogens. Manual atom deletion loses those guarantees.
     # Sanitization recalculates implicit H counts after explicit H removal.
-    return Chem.RemoveHs(molecule)
+    return Chem.RemoveHs(molecule, updateExplicitCount=True)
 
 
 def fragment(molecule: Chem.rdchem.Mol) -> list[Chem.rdchem.Mol]:
@@ -384,10 +384,10 @@ def to_rdkit(
             raise SteamrollConversionError(
                 "Inference requires exactly one metal center; supply SMILES"
             )
-        # Use the specialized TMC converter; Hs come back implicit → make explicit.
+        # The specialized converter retains supplied atoms and their coordinates.
         xyz_file = _write_temp_xyz(atomic_numbers, coords)
         try:
-            rdkm = get_tmc_mol(xyz_file, charge)
+            rdkm = get_tmc_mol(xyz_file, charge, with_stereo=True)
         except Exception as e:
             raise SteamrollConversionError("xyz2mol_tm conversion failed") from e
         finally:
@@ -395,7 +395,7 @@ def to_rdkit(
         if rdkm is None:
             raise SteamrollConversionError("xyz2mol_tm returned no molecule")
         _validate_candidate(rdkm, atomic_numbers, charge, smiles)
-        return remove_hydrogens(rdkm) if remove_Hs else Chem.AddHs(rdkm, addCoords=True)
+        return remove_hydrogens(rdkm) if remove_Hs else rdkm
 
     for use_huckel in (False, True):
         try:

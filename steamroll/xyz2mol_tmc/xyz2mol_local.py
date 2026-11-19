@@ -769,16 +769,11 @@ def AC2mol(
 
 
 def get_proto_mol(atoms):
-    """"""
-    mol = Chem.MolFromSmarts("[#" + str(atoms[0]) + "]")
-    rwMol = Chem.RWMol(mol)
-    for i in range(1, len(atoms)):
-        a = Chem.Atom(atoms[i])
-        rwMol.AddAtom(a)
-
-    mol = rwMol.GetMol()
-
-    return mol
+    """Build ordinary atoms without introducing a SMARTS query atom at index zero."""
+    mol = Chem.RWMol()
+    for number in atoms:
+        mol.AddAtom(Chem.Atom(number))
+    return mol.GetMol()
 
 
 def read_xyz_file(filename, look_for_charge=True):

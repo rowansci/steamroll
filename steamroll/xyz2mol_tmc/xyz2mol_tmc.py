@@ -19,10 +19,8 @@ from rdkit import Chem
 from rdkit.Chem import GetPeriodicTable, rdchem, rdEHTTools, rdmolops
 from rdkit.Chem.MolStandardize import rdMolStandardize
 
-from ..utils import strip_to_connectivity
 from .xyz2mol_local import (
     AC2mol,
-    chiral_stereo_check,
     read_xyz_file,
     xyz2AC_obabel,
 )
@@ -241,7 +239,7 @@ def shell(cmd, shell=False):
     return output
 
 
-def fix_NO2(smiles):
+def fix_NO2(mol: Chem.rdchem.Mol) -> Chem.rdchem.Mol:
     """Localizes nitro groups that have been assigned a charge of -2 (neutral
     Nitrogen bound to two negatively charged Oxygen atoms).
 
@@ -249,8 +247,7 @@ def fix_NO2(smiles):
     configuration of a nitro group. The oxidation state on the
     transition metal is changed accordingly.
     """
-    m = Chem.MolFromSmiles(smiles)
-    emol = Chem.RWMol(m)
+    emol = Chem.RWMol(mol)
     _metal_smarts = ",".join(f"#{n}" for n in TRANSITION_METALS_NUM)
     patt = Chem.MolFromSmarts(f"[#8-]-[#7+0]-[#8-].[{_metal_smarts}]")
     matches = emol.GetSubstructMatches(patt)
@@ -269,18 +266,17 @@ def fix_NO2(smiles):
 
     mol = emol.GetMol()
     Chem.SanitizeMol(mol)
-    return Chem.MolToSmiles(Chem.MolFromSmiles(Chem.MolToSmiles(mol)))
+    return mol
 
 
-def fix_equivalent_Os(smiles):
+def fix_equivalent_Os(mol: Chem.rdchem.Mol) -> Chem.rdchem.Mol:
     """Localizes and fixes where a neutral atom is coordinating to the metal
     but connected ro a negatively charged atom through resonane.
 
     The charge is moved to the coordinating atom and charges fixed
     accordingly.
     """
-    m = Chem.MolFromSmiles(smiles)
-    emol = Chem.RWMol(m)
+    emol = Chem.RWMol(mol)
 
     patt = Chem.MolFromSmarts("[#6-,#7-,#8-,#15-,#16-]-[*]=[#6,#7,#8,#15,#16]")
 
@@ -309,7 +305,7 @@ def fix_equivalent_Os(smiles):
 
     mol = emol.GetMol()
     Chem.SanitizeMol(mol)
-    return Chem.MolToSmiles(Chem.MolFromSmiles(Chem.MolToSmiles(mol)))
+    return mol
 
 
 def get_proposed_ligand_charge(ligand_mol, cutoff=-10):
@@ -556,6 +552,8 @@ def get_lig_mol(mol, charge, coordinating_atoms):
 def get_tmc_mol(xyz_file, overall_charge, with_stereo=False):
     """Get TMC mol object from given xyz file.
 
+    Preserve supplied atoms and coordinates in input order.
+
     Args:
         xyz_file (str) : Path to TMC xyz file
         overall_charge (int): Overall charge of TMC
@@ -658,27 +656,23 @@ def get_tmc_mol(xyz_file, overall_charge, with_stereo=False):
             continue
         emol.AddBond(i, tm_idx, Chem.BondType.DATIVE)
 
-    smiles = Chem.MolToSmiles(emol.GetMol())
-
-    # Fix specific cases
-    smiles = fix_equivalent_Os(smiles)
-    smiles = fix_NO2(smiles)
-
-    tmc_mol = Chem.MolFromSmiles(smiles)
+    tmc_mol = fix_NO2(fix_equivalent_Os(emol.GetMol()))
     Chem.SanitizeMol(tmc_mol)
+    order = sorted(
+        range(tmc_mol.GetNumAtoms()),
+        key=lambda i: tmc_mol.GetAtomWithIdx(i).GetIntProp("__origIdx"),
+    )
+    original_indices = [tmc_mol.GetAtomWithIdx(i).GetIntProp("__origIdx") for i in order]
+    if original_indices != list(range(mol.GetNumAtoms())):
+        raise ValueError("Metal conversion lost supplied atom identities")
+    tmc_mol = Chem.RenumberAtoms(tmc_mol, order)
+    # Chemistry corrections must not change coordinates, including supplied Hs.
+    tmc_mol.RemoveAllConformers()
+    tmc_mol.AddConformer(Chem.Conformer(mol.GetConformer()), assignId=True)
+    for atom in tmc_mol.GetAtoms():
+        atom.ClearProp("__origIdx")
     if with_stereo:
-        chiral_stereo_check(tmc_mol)
-
-    # Re-attach 3D coords lost in the SMILES roundtrip; strip bonds on both sides to match.
-    emol_mol = emol.GetMol()
-    if emol_mol.GetNumConformers() > 0:
-        match = strip_to_connectivity(emol_mol).GetSubstructMatch(strip_to_connectivity(tmc_mol))
-        if match:
-            emol_conf = emol_mol.GetConformer()
-            conf = Chem.Conformer(tmc_mol.GetNumAtoms())
-            for i, emol_idx in enumerate(match):
-                conf.SetAtomPosition(i, emol_conf.GetAtomPosition(emol_idx))
-            tmc_mol.AddConformer(conf, assignId=True)
+        Chem.AssignStereochemistryFrom3D(tmc_mol)
 
     return tmc_mol
 
