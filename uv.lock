@@ -436,7 +436,7 @@ wheels = [
 
 [[package]]
 name = "steamroll"
-version = "0.0.12"
+version = "0.0.15"
 source = { editable = "." }
 dependencies = [
     { name = "networkx" },

@@ -1,11 +1,13 @@
 """Metal conversion retains atom identity through chemistry corrections."""
 
+from unittest.mock import Mock
+
 import numpy as np
 import pytest
 from rdkit import Chem
 
 from steamroll import to_rdkit
-from steamroll.xyz2mol_tmc.xyz2mol_tmc import TRANSITION_METALS_NUM
+from steamroll.xyz2mol_tmc import xyz2mol_tmc
 from tests.test_steamroll import DATA_DIR, read_xyz
 
 _METAL_FIXTURES = [
@@ -54,7 +56,9 @@ def test_metal_ligand_chemistry(
     """Metal conversion preserves ligand bond orders, charges, and coordination."""
     numbers, coords, charge = read_xyz(DATA_DIR / f"{name}.xyz")
     mol = to_rdkit(numbers, coords, charge=charge)
-    (metal,) = (atom for atom in mol.GetAtoms() if atom.GetAtomicNum() in TRANSITION_METALS_NUM)
+    (metal,) = (
+        atom for atom in mol.GetAtoms() if atom.GetAtomicNum() in xyz2mol_tmc.TRANSITION_METALS_NUM
+    )
     assert metal.GetFormalCharge() == metal_charge
     assert metal.GetDegree() == coordination
     assert all(bond.GetBondType() == Chem.BondType.DATIVE for bond in metal.GetBonds())
@@ -62,3 +66,16 @@ def test_metal_ligand_chemistry(
     ligands.RemoveAtom(metal.GetIdx())
     Chem.SanitizeMol(ligands)
     assert Chem.MolToSmiles(ligands) == Chem.MolToSmiles(Chem.MolFromSmiles(ligand_smiles))
+
+
+@pytest.mark.parametrize("atomic_number", [9, 17, 35, 53])
+def test_halide_charge_skips_native_huckel(
+    monkeypatch: pytest.MonkeyPatch, atomic_number: int
+) -> None:
+    """Monatomic halides are assigned -1 without calling the native solver."""
+    eht = Mock(side_effect=AssertionError("Monatomic halides do not need EHT"))
+    monkeypatch.setattr(xyz2mol_tmc.rdEHTTools, "RunMol", eht)
+    ligand = Chem.RWMol()
+    ligand.AddAtom(Chem.Atom(atomic_number))
+    assert xyz2mol_tmc.get_proposed_ligand_charge(ligand) == -1
+    eht.assert_not_called()

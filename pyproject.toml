@@ -2,7 +2,7 @@
 name = "steamroll"
 description = "Package to convert 3D molecules to RDKit"
 license = {file = "LICENSE"}
-version = "0.0.14"
+version = "0.0.15"
 readme = "README.md"
 keywords = []
 authors = [

@@ -320,11 +320,12 @@ def get_proposed_ligand_charge(ligand_mol, cutoff=-10):
     NOTE: This runs on metal-free ligand fragments only (after MetalDisconnector
     separates the metal). The EHT cutoff is independent of metal identity.
     """
-    valence_electrons = 0
-    passed, result = rdEHTTools.RunMol(ligand_mol)
-    for a in ligand_mol.GetAtoms():
-        valence_electrons += atomic_valence_electrons[a.GetAtomicNum()]
+    # Monatomic halide ligands have closed-shell charge -1. RDKit's native
+    # Hückel routine can crash on these fragments.
+    if ligand_mol.GetNumAtoms() == 1 and ligand_mol.GetAtomWithIdx(0).GetAtomicNum() in (9, 17, 35, 53):
+        return -1
 
+    valence_electrons = sum(atomic_valence_electrons[a.GetAtomicNum()] for a in ligand_mol.GetAtoms())
     passed, result = rdEHTTools.RunMol(ligand_mol)
     N_occ_orbs = sum(1 for i in result.GetOrbitalEnergies() if i < cutoff)
     charge = valence_electrons - 2 * N_occ_orbs
