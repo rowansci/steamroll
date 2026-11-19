@@ -266,10 +266,19 @@ def _validate_candidate(
         raise SteamrollTopologyMismatchError("Conversion does not match the supplied SMILES")
 
 
+def _charge_penalty(mol: Chem.rdchem.Mol) -> int:
+    """Score charge separation, with extra cost for charges outside N+ and O-."""
+    return sum(
+        abs(atom.GetFormalCharge())
+        * (1 if (atom.GetAtomicNum(), atom.GetFormalCharge()) in {(7, 1), (8, -1)} else 9)
+        for atom in mol.GetAtoms()
+    )
+
+
 def _from_legacy(
-    atomic_numbers: list[int], coordinates: list[list[float]], charge: int
+    atomic_numbers: list[int], coordinates: list[list[float]], charge: int, *, required: bool = True
 ) -> Chem.rdchem.Mol | None:
-    """Run legacy inference with a shared wall-clock deadline for both attempts."""
+    """Run legacy inference under one deadline and raise on timeout when required."""
     try:
         process = subprocess.run(
             [sys.executable, "-m", "steamroll._legacy"],
@@ -280,7 +289,10 @@ def _from_legacy(
             check=False,
         )
     except subprocess.TimeoutExpired as e:
-        raise SteamrollConversionError("Legacy bond-order conversion budget exhausted") from e
+        if required:
+            raise SteamrollConversionError("Legacy bond-order conversion budget exhausted") from e
+        logger.debug("Legacy charge refinement timed out")
+        return None
     if process.returncode != 0 or not process.stdout.strip():
         logger.debug("Legacy conversion failed: %s", process.stderr)
         return None
@@ -328,8 +340,10 @@ def to_rdkit(
     Note:
         Organic XYZ input should include hydrogens. RDKit inference tries geometric
         connectivity, then Hückel connectivity, with 10,000 bond-order iterations per
-        attempt. Budget exhaustion is terminal. Legacy inference has a shared five-second
-        subprocess deadline and does not retry with charge penalties. These limits do
+        attempt. Required inference raises on budget exhaustion. Legacy inference has a
+        shared five-second subprocess deadline. Optional refinement compares an unusual
+        XYZ-only charge assignment with one legacy result, retaining atom connectivity.
+        If refinement times out, the original assignment is returned. These limits do
         not impose a wall-clock deadline on RDKit or specialized metal conversion.
         Carbon-substituted sulfoxides use S=O to preserve existing MMFF typing.
         XYZ alone does not specify isotopes or guarantee a particular spin state.
@@ -411,10 +425,18 @@ def to_rdkit(
                 ) from e
             logger.debug("RDKit conversion failed (Hückel=%s): %s", use_huckel, e)
 
-    if rdkm is None:
-        candidate = _from_legacy(atomic_numbers, coords, charge)
+    if rdkm is None or (smiles is None and _charge_penalty(rdkm) >= 8):
+        candidate = _from_legacy(atomic_numbers, coords, charge, required=rdkm is None)
         if candidate is not None and _candidate_ok(candidate):
-            rdkm = candidate
+            if rdkm is None or (
+                _charge_penalty(candidate) < _charge_penalty(rdkm)
+                and [atom.GetAtomicNum() for atom in candidate.GetAtoms()]
+                == [atom.GetAtomicNum() for atom in rdkm.GetAtoms()]
+                and np.array_equal(
+                    Chem.GetAdjacencyMatrix(candidate), Chem.GetAdjacencyMatrix(rdkm)
+                )
+            ):
+                rdkm = candidate
 
     if rdkm is None and fail_without_bond_order:
         error = SteamrollTopologyMismatchError if smiles is not None else SteamrollConversionError
